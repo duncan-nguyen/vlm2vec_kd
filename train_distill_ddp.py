@@ -4,10 +4,12 @@ from src.arguments import DataArguments, MTEBArguments, TrainingArguments, Model
 from src import model
 from src.utils import print_rank, print_master
 from src.criterions import build_criterion
-import time 
+from src import profiling
+import time
 import os
 import sys
-from tqdm import tqdm 
+from contextlib import nullcontext
+from tqdm import tqdm
 import math
 
 import torch
@@ -55,15 +57,18 @@ def prepare_dataset(data_args, model_args):
 def is_main_process():
     return (not dist.is_initialized()) or dist.get_rank() == 0
 
-def to_device(obj, device):
+def to_device(obj, device, non_blocking=True):
     if obj is None:
         return None
     elif isinstance(obj, torch.Tensor):
-        return obj.to(device)
+        # non_blocking only has an effect for pinned source memory (which the
+        # DataLoader now provides); it is a no-op otherwise, and the copy is
+        # ordered against the following kernels on the same stream either way.
+        return obj.to(device, non_blocking=non_blocking)
     elif isinstance(obj, dict):
-        return {k: to_device(v, device) for k, v in obj.items()}
+        return {k: to_device(v, device, non_blocking) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
-        result = [to_device(v, device) for v in obj]
+        result = [to_device(v, device, non_blocking) for v in obj]
         return tuple(result) if isinstance(obj, tuple) else result
     else:
         if hasattr(obj, 'to') and callable(obj.to):
@@ -87,8 +92,17 @@ class Trainer:
         self.model_args = model_args
         self.training_args = training_args
         
-        self.distiller = DDP(self.distiller, device_ids=[self.gpu_id])
-    
+        # broadcast_buffers: the teacher is frozen and the student has no
+        # running stats, so the per-forward buffer broadcast is pure overhead.
+        # gradient_as_bucket_view: lets DDP reuse the reduction buckets as the
+        # .grad storage instead of keeping a second copy.
+        self.distiller = DDP(
+            self.distiller,
+            device_ids=[self.gpu_id],
+            broadcast_buffers=False,
+            gradient_as_bucket_view=True,
+        )
+
     def _debug_batch_devices(self, obj, prefix=""):
         if obj is None:
             print(f"{prefix}Value: None")
@@ -112,59 +126,91 @@ class Trainer:
         except Exception as e:
             print(f"{prefix}ERROR: {e}")
         
+    LOSS_KEYS = ('loss', 'span_loss', 'contrastive_loss', 'kd_loss_rkd',
+                 'cross_modal_loss', 'kd_loss_dtw')
+
+    def _as_scalar(self, value):
+        if isinstance(value, torch.Tensor):
+            return value.detach().to(device=self.device, dtype=torch.float32).reshape(())
+        return torch.tensor(float(value), device=self.device, dtype=torch.float32)
+
     def run_epoch(self, epoch):
         self.train_data.sampler.set_epoch(epoch)
-        losses, contrastive_losses, span_losses = [], [], []
-        kd_rkd_losses, cross_modal_losses, kd_dtw_losses = [], [], []
-        
-        progress_bar = tqdm(total=len(self.train_data.dataset) // self.training_args.per_device_train_batch_size // self.training_args.gradient_accumulation_steps // dist.get_world_size(), 
+        grad_accum = self.training_args.gradient_accumulation_steps
+        logging_steps = max(1, int(self.training_args.logging_steps))
+
+        # Loss bookkeeping is accumulated on the GPU. Calling .item() on every
+        # component of every micro-batch forces a host sync per call and stalls
+        # the pipeline; we pull the running means back once per logging step.
+        running = torch.zeros(len(self.LOSS_KEYS), device=self.device, dtype=torch.float32)
+        running_n = 0
+        opt_step = 0
+
+        progress_bar = tqdm(total=len(self.train_data.dataset) // self.training_args.per_device_train_batch_size // self.training_args.gradient_accumulation_steps // dist.get_world_size(),
                             desc=f"Epoch {epoch}",
                             disable=not dist.get_rank() == 0)
-        for batch_idx, batch in enumerate(self.train_data):
-            batch = to_device(batch, self.device)
-            loss_dict = self.distiller(self.criterion, batch)
-            loss = loss_dict['loss'] / self.training_args.gradient_accumulation_steps
-            span_loss = loss_dict.get('span_loss', torch.tensor(0.0))
-            contrastive_loss = loss_dict.get('contrastive_loss', torch.tensor(0.0))
-            kd_rkd_loss = loss_dict.get('kd_loss_rkd', torch.tensor(0.0))
-            cross_modal_loss = loss_dict.get('cross_modal_loss', torch.tensor(0.0))
-            kd_dtw_loss = loss_dict.get('kd_loss_dtw', torch.tensor(0.0))
+        for batch_idx, batch in enumerate(profiling.timed_iter(self.train_data, "data_wait")):
+            with profiling.section("to_device"):
+                batch = to_device(batch, self.device)
 
-            losses.append(loss.detach().item() * self.training_args.gradient_accumulation_steps)
-            contrastive_losses.append(contrastive_loss.detach().item())
-            span_losses.append(span_loss.detach().item())
-            kd_rkd_losses.append(kd_rkd_loss.detach().item())
-            cross_modal_losses.append(cross_modal_loss.detach().item())
-            kd_dtw_losses.append(kd_dtw_loss.detach().item())
-            
-            batch_loss = sum(losses) / len(losses)
-            batch_contrastive_loss = sum(contrastive_losses) / len(contrastive_losses)
-            batch_kd_loss = sum(span_losses) / len(span_losses)
-            batch_kd_rkd_loss = sum(kd_rkd_losses) / len(kd_rkd_losses)
-            batch_cross_modal_loss = sum(cross_modal_losses) / len(cross_modal_losses)
-            batch_kd_dtw_loss = sum(kd_dtw_losses) / len(kd_dtw_losses)
-            
-            loss.backward()
-            if (batch_idx + 1) % self.training_args.gradient_accumulation_steps == 0:
-                self.optimizer.step()
-                self.lr_scheduler.step()
-                self.optimizer.zero_grad()
-            
+            # Skip the DDP all-reduce on every micro-batch but the last one of
+            # an accumulation window; otherwise gradients are reduced
+            # grad_accum times per optimizer step for no reason.
+            is_sync_step = (batch_idx + 1) % grad_accum == 0
+            sync_ctx = nullcontext() if is_sync_step else self.distiller.no_sync()
+
+            with sync_ctx:
+                with profiling.section("forward"):
+                    loss_dict = self.distiller(self.criterion, batch)
+                    loss = loss_dict['loss'] / grad_accum
+
+                with profiling.section("bookkeeping"):
+                    running += torch.stack([
+                        self._as_scalar(loss_dict.get(k, 0.0)) for k in self.LOSS_KEYS
+                    ])
+                    running_n += 1
+
+                with profiling.section("backward"):
+                    loss.backward()
+
+            if is_sync_step:
+                with profiling.section("optimizer"):
+                    self.optimizer.step()
+                    self.lr_scheduler.step()
+                    self.optimizer.zero_grad(set_to_none=True)
+
+                opt_step += 1
+                profiling.profiler.step()
+
                 if is_main_process():
-                    progress_bar.set_postfix({
-                        'loss': f"{batch_loss:.4f}",
-                        'kd_loss': f"{batch_kd_loss:.4f}",
-                        'contrastive_loss': f"{batch_contrastive_loss:.4f}",
-                        'kd_rkd_loss': f"{batch_kd_rkd_loss:.4f}",
-                        'cross_modal_loss': f"{batch_cross_modal_loss:.4f}",
-                        'kd_dtw_loss': f"{batch_kd_dtw_loss:.4f}",
-                        'lr': f"{self.lr_scheduler.get_last_lr()[0]:.6f}",
-                    })
                     progress_bar.update(1)
-                
-            torch.cuda.empty_cache()
+                    if opt_step % logging_steps == 0:
+                        # Single device->host transfer for all components.
+                        means = (running / max(running_n, 1)).tolist()
+                        stats = dict(zip(self.LOSS_KEYS, means))
+                        progress_bar.set_postfix({
+                            'loss': f"{stats['loss']:.4f}",
+                            'kd_loss': f"{stats['span_loss']:.4f}",
+                            'contrastive_loss': f"{stats['contrastive_loss']:.4f}",
+                            'kd_rkd_loss': f"{stats['kd_loss_rkd']:.4f}",
+                            'cross_modal_loss': f"{stats['cross_modal_loss']:.4f}",
+                            'kd_dtw_loss': f"{stats['kd_loss_dtw']:.4f}",
+                            'lr': f"{self.lr_scheduler.get_last_lr()[0]:.6f}",
+                        })
+
+                if profiling.profiler.should_report and is_main_process():
+                    print(profiling.profiler.report(f"epoch {epoch}"), flush=True)
+                if profiling.profiler.should_stop:
+                    print_rank(
+                        f"VLM2VEC_PROFILE_STEPS reached "
+                        f"({profiling.profiler.n_steps} steps), stopping epoch early."
+                    )
+                    break
+
         progress_bar.close()
-        
+        if profiling.profiler.enabled and is_main_process():
+            print(profiling.profiler.report(f"epoch {epoch} final"), flush=True)
+
     def train(self):
         for epoch in range(self.training_args.num_train_epochs):
             self.run_epoch(epoch)
@@ -252,14 +298,28 @@ def main():
         data_args=data_args,
         training_args=training_args,
     )
-    train_dataloader = DataLoader(
-        train_dataset,
+    # The collator runs four processor passes per batch (student/teacher x
+    # qry/pos), each looping over samples to decode, resize and tokenize. With
+    # num_workers=0 all of that ran on the main process and the GPU sat idle
+    # waiting for it. Overlap it with compute instead.
+    num_workers = training_args.dataloader_num_workers
+    dataloader_kwargs = dict(
         batch_size=training_args.per_device_train_batch_size,
         sampler=dist_sampler,
         collate_fn=collator,
         drop_last=True,
-        pin_memory=False,
+        num_workers=num_workers,
+        pin_memory=training_args.dataloader_pin_memory,
     )
+    if num_workers > 0:
+        dataloader_kwargs["persistent_workers"] = True
+        dataloader_kwargs["prefetch_factor"] = training_args.dataloader_prefetch_factor or 4
+    print_rank(
+        f"DataLoader: num_workers={num_workers}, "
+        f"pin_memory={dataloader_kwargs['pin_memory']}, "
+        f"prefetch_factor={dataloader_kwargs.get('prefetch_factor')}"
+    )
+    train_dataloader = DataLoader(train_dataset, **dataloader_kwargs)
     num_trainable_vision = 0
     for n, p in distiller.student.named_parameters():
         if "mm_projector" in n or "multi_modal_projector" in n:

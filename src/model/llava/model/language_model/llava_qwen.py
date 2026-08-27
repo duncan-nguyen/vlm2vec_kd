@@ -83,6 +83,7 @@ class LlavaQwen2ForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
         image_sizes: Optional[List[List[int]]] = None,
         return_dict: Optional[bool] = None,
         cache_position=None,
+        logits_to_keep: Union[int, torch.Tensor] = 0,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         image_features = None
 
@@ -117,7 +118,10 @@ class LlavaQwen2ForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict
+            return_dict=return_dict,
+            # 0 keeps the old behaviour (lm_head over the whole
+            # sequence); the embedding path passes 1.
+            logits_to_keep=logits_to_keep,
         )
         return LlavaQwen2OutputWithPast(
             loss=output.loss,

@@ -92,6 +92,7 @@ class Distiller(nn.Module):
         self.training_args = training_args
         self.student = self._load_student()
         self.teacher = self._load_teacher()
+        self._configure_attention()
         self.student_hidden_dim = self.model_args.student_hidden_dim
         self.teacher_hidden_dim = self.model_args.teacher_hidden_dim
         self.temperature = model_args.temperature
@@ -136,6 +137,28 @@ class Distiller(nn.Module):
         print("Teacher model loaded.")
         return teacher
     
+    def _configure_attention(self):
+        """Only ask for attention matrices on the side the criterion reads.
+
+        `output_attentions=True` pins the backbone to the eager attention kernel
+        and keeps a (B, heads, L, L) tensor per layer alive. For the student that
+        also inflates the backward pass, so the saving is largest there. Any side
+        whose attentions are unused switches to SDPA.
+        """
+        from src.criterions import attention_needs
+
+        kd_loss_type = getattr(self.training_args, "kd_loss_type", None)
+        student_needs, teacher_needs = attention_needs(kd_loss_type)
+        print_master(
+            f"Criterion '{kd_loss_type}' attention needs: "
+            f"student={student_needs}, teacher={teacher_needs}"
+        )
+
+        self.student.output_attentions = student_needs
+        self.teacher.output_attentions = teacher_needs
+        self.student.set_attn_implementation("eager" if student_needs else "sdpa")
+        self.teacher.set_attn_implementation("eager" if teacher_needs else "sdpa")
+
     def get_student_processor(self):
         processor = load_processor(self.model_args, None)
         print("Student processor loaded.")
@@ -323,7 +346,13 @@ class DistillationDataset(Dataset):
     
     def __len__(self):
         return len(self.train_data)
-    def _get_image(self, img_path, backbone):
+    def _decode_image(self, img_path):
+        """Decode one image file to RGB, padded up to the minimum size.
+
+        Split out from _get_image so the student and the teacher can share a
+        single decode of the same file instead of hitting the disk and the JPEG
+        decoder twice per sample.
+        """
         if not img_path:
             return None
         full_img_path = os.path.join(self.data_args.image_dir, img_path)
@@ -334,22 +363,32 @@ class DistillationDataset(Dataset):
         if width < MIN_SIZE or height < MIN_SIZE:
             new_width = max(width, MIN_SIZE)
             new_height = max(height, MIN_SIZE)
-            result = Image.new(image.mode, (new_width, new_height), (0,0,0))
+            result = Image.new(image.mode, (new_width, new_height), (0, 0, 0))
             x_offset = (new_width - width) // 2
             y_offset = (new_height - height) // 2
             result.paste(image, (x_offset, y_offset))
             image = result
+        return image
+
+    def _resize_for_backbone(self, image, backbone):
+        if image is None:
+            return None
         if backbone != PHI3V and self.data_args.image_resolution:
             return process_image(image, self.data_args.image_resolution)
-        else:
-            return image
-        
+        return image
+
+    def _get_image(self, img_path, backbone):
+        return self._resize_for_backbone(self._decode_image(img_path), backbone)
+
+
     def __getitem__(self, data_idx):
         # print(f">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>get image called, {data_idx}", flush=True)
         
+        # One row fetch, not four: indexing an Arrow-backed dataset decodes the
+        # whole row each time it is subscripted.
+        row = self.train_data[data_idx]
         qry_texts, qry_image_paths, pos_texts, pos_image_paths = (
-            self.train_data[data_idx]["qry"], self.train_data[data_idx]["qry_image_path"],
-            self.train_data[data_idx]["pos_text"], self.train_data[data_idx]["pos_image_path"]
+            row["qry"], row["qry_image_path"], row["pos_text"], row["pos_image_path"]
         )
 
         if not isinstance(qry_texts, list):
@@ -368,12 +407,18 @@ class DistillationDataset(Dataset):
             # instructions were hardcoded with Phi3 image special tokens
             # Update image token for llava and colqwen2, qwenvl
             
+            # Decode each file once and reuse it for both backbones; the student
+            # and the teacher used to open and JPEG-decode the same two files
+            # independently.
+            raw_qry_image = self._decode_image(qry_image_path)
+            raw_pos_image = self._decode_image(pos_image_path)
+
             stu_qry_text, stu_pos_text = qry_text, pos_text
             if student_backbone != PHI3V:
                 stu_qry_text = stu_qry_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[student_backbone])
                 stu_pos_text = stu_pos_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[student_backbone])
-            stu_qry_image = self._get_image(qry_image_path, student_backbone)
-            stu_pos_image = self._get_image(pos_image_path, student_backbone)
+            stu_qry_image = self._resize_for_backbone(raw_qry_image, student_backbone)
+            stu_pos_image = self._resize_for_backbone(raw_pos_image, student_backbone)
 
             if (not stu_qry_text and not stu_qry_image) or (not stu_pos_text and not stu_pos_image):
                 print("empty inputs")
@@ -388,8 +433,8 @@ class DistillationDataset(Dataset):
             if teacher_backbone != PHI3V:
                 teacher_qry_text = teacher_qry_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[teacher_backbone])
                 teacher_pos_text = teacher_pos_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[teacher_backbone])
-            teacher_qry_image = self._get_image(qry_image_path, teacher_backbone)
-            teacher_pos_image = self._get_image(pos_image_path, teacher_backbone)
+            teacher_qry_image = self._resize_for_backbone(raw_qry_image, teacher_backbone)
+            teacher_pos_image = self._resize_for_backbone(raw_pos_image, teacher_backbone)
 
             if (not teacher_qry_text and not teacher_qry_image) or (not teacher_pos_text and not teacher_pos_image):
                 print("empty inputs")

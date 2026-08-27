@@ -48,6 +48,40 @@ Just run the scripts in folder `scripts`
 bash scripts/train_RKD.sh
 bash scripts/train_distill_propose_V.sh
 ```
+## Profiling the training loop
+
+The training loop is instrumented with a step profiler that is a no-op unless it
+is switched on:
+
+```bash
+VLM2VEC_PROFILE=1 VLM2VEC_PROFILE_STEPS=100 bash train_scripts/rebuttal_hierd_grounding.sh
+```
+
+It prints a per-step breakdown (`data_wait`, `to_device`, `forward` ->
+`teacher_fwd` / `student_fwd` / `spacy_spans` / `text_span_loss` /
+`vision_cluster_loss` -> `vision_cluster` / `cross_modal_loss`, `backward`,
+`optimizer`) so you can see where a step actually goes before optimising it.
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `VLM2VEC_PROFILE` | `0` | enable the profiler |
+| `VLM2VEC_PROFILE_SYNC` | `1` | `torch.cuda.synchronize()` around each section, so CUDA async execution does not misattribute time. Adds overhead, so profiled steps are slower than real ones |
+| `VLM2VEC_PROFILE_EVERY` | `50` | print a report every N optimizer steps |
+| `VLM2VEC_PROFILE_STEPS` | `0` | stop after N steps (0 = never) |
+
+### Other performance switches
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `VLM2VEC_SPAN_CACHE` | unset | directory to persist the spaCy span cache across runs. Unset keeps it in memory only |
+| `VLM2VEC_SPACY_PROCESSES` | `1` | processes for `nlp.pipe`. Values > 1 were a large net loss at batch scale |
+| `VLM2VEC_FORCE_EAGER` | `0` | force eager attention on both models (fallback if SDPA misbehaves) |
+| `VLM2VEC_NO_MERGE_LORA` | `0` | keep the frozen teacher's LoRA adapters unmerged |
+| `VLM2VEC_FULL_LOGITS` | `0` | run `lm_head` over the whole sequence again instead of the last position |
+
+Dataloader workers are set with the standard HF flag, `--dataloader_num_workers`
+(the training scripts pass `8`).
+
 ## Inference & Evaluation
 1. To evaluate our model on an MMEB dataset (e.g., MSCOCO_i2t), run:
 ```bash 

@@ -40,13 +40,72 @@ class MMEBModel(nn.Module):
         self.normalize = normalize
         self.temperature = temperature
         self.cross_entropy = nn.CrossEntropyLoss(reduction='mean')
+        # Whether encode_input() should ask the backbone for attention matrices.
+        # Defaults to True to preserve the behaviour of every existing caller;
+        # Distiller flips it off for the side whose attentions the active
+        # criterion never reads (see src.criterions.attention_needs).
+        self.output_attentions = True
         self.is_ddp = dist.is_initialized()
         if self.is_ddp:
             self.process_rank = dist.get_rank()
             self.world_size = dist.get_world_size()
 
-    def encode_input(self, input):
+    def set_attn_implementation(self, impl: str):
+        """Switch the attention kernel after construction.
+
+        The custom LLaVA classes hard-code `eager` in their __init__ and the
+        attention modules read `config._attn_implementation` at forward time, so
+        this can only be done once the model exists. Mirrors the configs that
+        build()/load() already touch (top level + vision/text sub-configs).
+        """
+        if os.environ.get("VLM2VEC_FORCE_EAGER", "0").strip().lower() not in ("0", "", "false", "no"):
+            impl = "eager"
+        configs = []
+        base = self.encoder
+        for attr in ("base_model", "model"):
+            cfg = getattr(base, "config", None)
+            if cfg is not None:
+                configs.append(cfg)
+            base = getattr(base, attr, None)
+            if base is None:
+                break
+        cfg = getattr(self.encoder, "config", None)
+        if cfg is not None:
+            configs.append(cfg)
+        seen = set()
+        for cfg in configs:
+            for target in (cfg, getattr(cfg, "vision_config", None), getattr(cfg, "text_config", None)):
+                if target is None or id(target) in seen:
+                    continue
+                seen.add(id(target))
+                target._attn_implementation = impl
+        print_master(f"Set attention implementation to '{impl}' on {len(seen)} config(s)")
+        return impl
+
+    # Backbones whose forward accepts `logits_to_keep`. An embedding model never
+    # reads .logits, but the CausalLM head still ran over the whole sequence: for
+    # FastVLM-0.5B the lm_head is 896x151936 = 136M params against ~360M in the
+    # transformer body, so that is roughly a third of the forward FLOPs spent on
+    # a (B, L, 151936) tensor that is thrown away. Keeping one position is the
+    # smallest value the HF signature allows.
+    _LOGITS_TO_KEEP_BACKBONES = {LLAVA_QWEN2, LLAVA_ONEVISION}
+
+    def _encoder_kwargs(self, output_attentions):
+        kwargs = {
+            "return_dict": True,
+            "output_hidden_states": True,
+            "output_attentions": output_attentions,
+        }
+        full_logits = os.environ.get("VLM2VEC_FULL_LOGITS", "0").strip().lower()
+        if (getattr(self, "model_backbone", None) in self._LOGITS_TO_KEEP_BACKBONES
+                and full_logits in ("0", "", "false", "no")):
+            kwargs["logits_to_keep"] = 1
+        return kwargs
+
+    def encode_input(self, input, output_attentions=None):
         INTERNVIDEO2 = "internvideo2"
+        if output_attentions is None:
+            output_attentions = self.output_attentions
         if getattr(self, "model_backbone", None) == INTERNVIDEO2:
             if "input_ids" in input.keys():
                 # text side
@@ -116,7 +175,7 @@ class MMEBModel(nn.Module):
             if hasattr(input, 'pixel_values'):
                 input['pixel_values'] = input['pixel_values'].squeeze(1)
                 input['image_sizes'] = input['image_sizes'].squeeze(1)
-            hidden_states = self.encoder(**input, return_dict=True, output_hidden_states=True, output_attentions=True)
+            hidden_states = self.encoder(**input, **self._encoder_kwargs(output_attentions))
             # add for image feature
             if hasattr(hidden_states, 'batch_image_embeds'):
                 image_features = hidden_states.batch_image_embeds
@@ -129,7 +188,7 @@ class MMEBModel(nn.Module):
             return pooled_output, image_features, attention_matrix, output_hidden_states
         elif getattr(self, "model_backbone", None) in [LLAVA_QWEN2, QWEN2_VL]:
             # print("Encoding input for FastVLM model backbone")
-            hidden_states = self.encoder(**input, return_dict=True, output_hidden_states=True, output_attentions=True)
+            hidden_states = self.encoder(**input, **self._encoder_kwargs(output_attentions))
             if hasattr(hidden_states, 'batch_image_embeds'):
                 image_features = hidden_states.batch_image_embeds
             else: 
@@ -142,7 +201,7 @@ class MMEBModel(nn.Module):
             return pooled_output, image_features, attention_matrix, output_hidden_states
         else:
             # import ipdb; ipdb.set_trace()
-            hidden_states = self.encoder(**input, return_dict=True, output_hidden_states=True, output_attentions=True)
+            hidden_states = self.encoder(**input, **self._encoder_kwargs(output_attentions))
             if hasattr(hidden_states, 'batch_image_embeds'):
                 image_features = hidden_states.batch_image_embeds
             else: 
@@ -509,7 +568,18 @@ class MMEBModel(nn.Module):
                     pass
                 print("Successfully loading the projector's weight")
                 
-            # lora_model = lora_model.merge_and_unload()
+            # A frozen model gains nothing from keeping the adapters separate:
+            # merging folds B@A back into the base weights and removes two extra
+            # matmuls per targeted linear on every forward. Only safe when the
+            # adapters will never be trained or saved, hence the is_trainable
+            # guard. VLM2VEC_NO_MERGE_LORA=1 restores the previous behaviour.
+            no_merge = os.environ.get("VLM2VEC_NO_MERGE_LORA", "0").strip().lower() not in ("0", "", "false", "no")
+            if not is_trainable and not no_merge:
+                try:
+                    lora_model = lora_model.merge_and_unload()
+                    print_master("Merged frozen LoRA adapters into the base weights")
+                except Exception as e:
+                    print_master(f"Warning: could not merge LoRA adapters ({e}); keeping them separate")
 
             model = cls(
                 encoder=lora_model,

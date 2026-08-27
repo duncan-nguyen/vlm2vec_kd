@@ -5,195 +5,32 @@ import torch.distributed as dist
 import numpy as np
 from transformers import AutoTokenizer
 from src.utils import print_rank 
-import hdbscan
 
 import spacy
 from spacy.matcher import Matcher
+from src import profiling
+from .text_spans import build_span_cache, filter_overlapping_spans, get_spans_offsets
+from .vision_clustering import (
+    cluster_vision_tokens,
+    compute_vision_distance_matrix,
+    get_patch_coordinates,
+    map_teacher_clusters_to_student,
+    prepare_vision_cluster_info,
+)
+
+def cluster_vision_tokens_hdbscan(hidden_states, num_patches_per_row, patch_size, image_width, image_height,
+                                  min_cluster_size=3):
+    """Thin alias kept so the call sites below stay unchanged (HDBSCAN backend)."""
+    return cluster_vision_tokens(
+        hidden_states, num_patches_per_row, patch_size, image_width, image_height,
+        min_cluster_size=min_cluster_size, backend="hdbscan",
+    )
+
 
 # ====== Text Processing Functions ======
 
-def filter_overlapping_spans(spans):
-    """Lọc các span chồng lấp."""
-    sorted_spans = sorted(spans, key=lambda s: (s[0], -s[1]))
-    filtered = []
-    words = []
-    if not sorted_spans:
-        return filtered, words
-
-    current_span = sorted_spans[0]
-    for next_span in sorted_spans[1:]:
-        _, current_end, p = current_span
-        _, next_end, _ = next_span
-        if next_end <= current_end:
-            continue
-        filtered.append((current_span[0], current_span[1]))
-
-        n_token = len(p)
-        words.extend([(p[idx - 1].idx, p[idx].idx) for idx in range(1, n_token)])
-        words.append((p[n_token - 1].idx, p[n_token - 1].idx + len(p[n_token - 1])))
-
-        current_span = next_span
-    
-    filtered.append((current_span[0], current_span[1]))
-    p = current_span[2]
-    n_token = len(p)
-    words.extend([(p[idx - 1].idx, p[idx].idx) for idx in range(1, n_token)])
-    words.append((p[n_token - 1].idx, p[n_token - 1].idx + len(p[n_token - 1])))
-    
-    return filtered, words
-
-
-def get_spans_offsets(texts, nlp, matcher):
-    """Trích xuất spans, words từ texts."""
-    disabled_components = ["ner", "lemmatizer"]
-    spans = []
-    words = []
-    phrases = []
-
-    for doc in nlp.pipe(texts, disable=disabled_components, n_process=4):
-        spans_with_offsets = []
-        
-        vps = matcher(doc)
-        for _, start, end in vps:
-            vp = doc[start:end]
-            spans_with_offsets.append((vp.start_char, vp.end_char, vp))
-            
-        ncs = doc.noun_chunks
-        spans_with_offsets.extend([(nc.start_char, nc.end_char, nc) for nc in ncs])
-
-        unique_spans, unique_words = filter_overlapping_spans(spans_with_offsets)
-        spans.append(unique_spans)
-        words.append(unique_words)
-    
-    return phrases, spans, words
 
 # ====== Vision Clustering Functions ======
-
-def get_patch_coordinates(patch_idx, num_patch_per_row, patch_size):
-    """Tinh tọa độ center của patch trên ảnh"""
-    row = patch_idx // num_patch_per_row
-    col = patch_idx % num_patch_per_row
-    center_x = col * patch_size + patch_size / 2
-    center_y = row * patch_size + patch_size / 2
-    return center_x, center_y
-
-def compute_vision_distance_matrix(hidden_states, num_pathches_per_row, patch_size, 
-                                   image_width, image_height, spatial_weight=0.1):
-    # tính distance matrix cho hdbscan
-    num_tokens = hidden_states.size(0)
-    device = hidden_states.device
-    hidden_norm = F.normalize(hidden_states, p=2, dim=-1)
-    sim_matrix = hidden_norm @ hidden_norm.T  # (num_tokens, num_tokens)
-    cosine_distance = 1 - sim_matrix  # (num_tokens, num_tokens)
-    coords = []
-    for i in range(num_tokens):
-        x, y = get_patch_coordinates(i, num_pathches_per_row, patch_size)
-        coords.append([x,y])
-    coords = torch.tensor(coords, dtype=torch.float, device=device)  # (num_tokens, 2)
-    
-    diff = coords.unsqueeze(0) - coords.unsqueeze(1)  # (num_tokens, num_tokens, 2)
-    spatial_distance = torch.sqrt((diff **2).sum(dim=-1) + 1e-8)  # (num_tokens, num_tokens)
-    max_dist = torch.sqrt(torch.tensor(image_width **2 + image_height **2, dtype=torch.float, device=device))
-    spatial_distance_norm = spatial_distance / max_dist  # normalize to [0,1]
-    
-    total_dist = cosine_distance + spatial_weight * spatial_distance_norm
-    return total_dist.cpu().numpy()
-
-def cluster_vision_tokens_hdbscan(hidden_states, num_patches_per_row, patch_size, image_width, image_height, min_cluster_size=3):
-    """Phân cụm vision tokens bằng HDBSCAN"""
-    
-    if hidden_states.size(0) < min_cluster_size:
-        return np.zeros(hidden_states.size(0), dtype=np.int32)
-    
-    distance_matrix = compute_vision_distance_matrix(
-        hidden_states, num_patches_per_row, patch_size,
-        image_width, image_height, spatial_weight=0.1
-    )
-    distance_matrix = (distance_matrix + distance_matrix.T) / 2
-    distance_matrix = np.maximum(distance_matrix, 0)
-    np.fill_diagonal(distance_matrix, 0)
-    
-    distance_matrix = distance_matrix.astype(np.float64)
-    
-    clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=min_cluster_size, 
-        metric='precomputed',
-        allow_single_cluster=True,
-        approx_min_span_tree=True,
-    )
-    cluster_labels = clusterer.fit_predict(distance_matrix)
-    if np.all(cluster_labels == -1):
-        cluster_labels = np.zeros(hidden_states.size(0), dtype=np.int32)
-    return cluster_labels
-
-def map_teacher_clusters_to_student(cluster_labels, 
-                                    teacher_num_patches_per_row, teacher_patch_size, 
-                                    student_num_patches_per_row, student_patch_size,
-                                    original_width, original_height,
-                                    student_resize=1024):
-    """Map cluster labels từ teacher sang student dựa trên vị trí patch"""
-    num_teacher_tokens = len(cluster_labels)
-    num_student_tokens = (student_resize // student_patch_size) ** 2
-    
-    student_cluster_mapping = {}
-    student_token_to_cluster = [-1] * num_student_tokens
-    for teacher_idx in range(num_teacher_tokens):
-        cluster_id = int(cluster_labels[teacher_idx])
-        if cluster_id == -1:
-            continue
-        teacher_x, teacher_y = get_patch_coordinates(
-            teacher_idx, teacher_num_patches_per_row, teacher_patch_size
-        )
-        
-        # Scale về ảnh resize của student
-        scale_x = student_resize / original_width
-        scale_y = student_resize / original_height
-        student_x = teacher_x * scale_x
-        student_y = teacher_y * scale_y
-        
-        student_col = int(student_x // student_patch_size)
-        student_row = int(student_y // student_patch_size)
-        
-        # Clamp để đảm bảo trong range
-        student_col = min(max(student_col, 0), student_num_patches_per_row - 1)
-        student_row = min(max(student_row, 0), student_num_patches_per_row - 1)
-        
-        student_idx = student_row * student_num_patches_per_row + student_col
-        
-        if cluster_id not in student_cluster_mapping:
-            student_cluster_mapping[cluster_id] = set()
-        student_cluster_mapping[cluster_id].add(student_idx)
-        student_token_to_cluster[student_idx] = cluster_id
-        
-    for cluster_id in student_cluster_mapping:
-        student_cluster_mapping[cluster_id] = list(student_cluster_mapping[cluster_id])
-        
-    return student_cluster_mapping, student_token_to_cluster
-
-def prepare_vision_cluster_info(cluster_labels, device):
-    """Chuẩn bị thông tin cluster cho vision tokens"""
-    cluster_labels = np.array(cluster_labels)
-    
-    valid_mask = cluster_labels >= 0
-    if not np.any(valid_mask):
-        return None
-    
-    valid_indices = np.where(valid_mask)[0]
-    valid_clusters = cluster_labels[valid_mask]
-    
-    # Reindex clusters từ 0
-    
-    unique_clusters = np.unique(valid_clusters)
-    cluster_mapping = {old: new for new, old in enumerate(unique_clusters)}
-    remapped_clusters = np.array([cluster_mapping[c] for c in valid_clusters])
-    
-    return {
-        'token_indices': torch.tensor(valid_indices, dtype=torch.long, device=device),
-        'cluster_ids': torch.tensor(remapped_clusters, dtype=torch.long, device=device),
-        'num_clusters': len(unique_clusters),
-        'cluster_mapping': cluster_mapping,
-        'original_labels': cluster_labels
-    }
 
 
 def prepare_span_indices_single(offset_mapping, spans_offsets):
@@ -693,6 +530,7 @@ def compute_cross_modal_loss_for_layer(projectors,
     
     return loss
 
+@profiling.timed("text_span_loss")
 def compute_text_span_loss(projectors, 
                            student_text_hidden_list, 
                            teacher_text_hidden_list,
@@ -761,6 +599,7 @@ def compute_text_span_loss(projectors,
     
     return total_loss, span_info_words, span_info_spans
 
+@profiling.timed("vision_cluster_loss")
 def compute_vision_cluster_loss(projectors,
                                 student_vision_hidden_list, 
                                 teacher_vision_hidden_list,
@@ -871,6 +710,7 @@ def compute_vision_cluster_loss(projectors,
     
     return total_loss, word_cluster_info, word_student_mapping, span_cluster_info, span_student_mapping
 
+@profiling.timed("cross_modal_loss")
 def compute_cross_modal_alignment_loss(projectors,
                                        student_text_hidden_list,
                                        teacher_text_hidden_list,
@@ -970,6 +810,11 @@ class SpanProposeCriterion(nn.Module):
             {"POS": "ADV", "OP": "*"},
         ]
         self.matcher.add("VERB_PHRASE", [VERB_PHRASE_PATTERN])
+
+        # text -> (spans, words) memo. The query side of an MMEB subset is one
+        # instruction repeated for every sample, so this alone removes about
+        # half the spaCy work; set VLM2VEC_SPAN_CACHE to keep it across runs.
+        self.span_cache = build_span_cache(rank=self.process_rank)
         
         self.teacher_patch_size = getattr(args, 'teacher_patch_size', 28)
         self.student_patch_size = getattr(args, 'student_patch_size', 64)
@@ -1011,7 +856,7 @@ class SpanProposeCriterion(nn.Module):
         device = student_qry_input['input_ids'].device
         
         # Forward teacher
-        with torch.no_grad():
+        with profiling.section("teacher_fwd"), torch.no_grad():
             teacher_model.eval()
             teacher_qry_output = teacher_model.encode_input(teacher_qry_input)
             teacher_pos_output = teacher_model.encode_input(teacher_pos_input)
@@ -1021,10 +866,11 @@ class SpanProposeCriterion(nn.Module):
             # print(f"Number of teacher pos image features: {len(teacher_pos_image_features) if teacher_pos_image_features is not None else 0}")
             
         # Forward student
-        student_qry_output = student_model.encode_input(student_qry_input)
-        student_pos_output = student_model.encode_input(student_pos_input)
-        student_qry_reps, student_qry_image_features, student_qry_attention, student_qry_hidden_states = student_qry_output
-        student_pos_reps, student_pos_image_features, student_pos_attention, student_pos_hidden_states = student_pos_output
+        with profiling.section("student_fwd"):
+            student_qry_output = student_model.encode_input(student_qry_input)
+            student_pos_output = student_model.encode_input(student_pos_input)
+            student_qry_reps, student_qry_image_features, student_qry_attention, student_qry_hidden_states = student_qry_output
+            student_pos_reps, student_pos_image_features, student_pos_attention, student_pos_hidden_states = student_pos_output
         
         # print(f"Number of student qry image features: {len(student_qry_image_features) if student_qry_image_features is not None else 0}")
         # print(f"Number of student pos image features: {len(student_pos_image_features) if student_pos_image_features is not None else 0}")
@@ -1065,8 +911,11 @@ class SpanProposeCriterion(nn.Module):
         )["offset_mapping"].to(device)
         
         # Lấy spans và words offsets
-        _, spans_qry_offsets, words_qry_offsets = get_spans_offsets(input_qry_texts, self.nlp, self.matcher)
-        _, spans_pos_offsets, words_pos_offsets = get_spans_offsets(input_pos_texts, self.nlp, self.matcher)
+        with profiling.section("spacy_spans"):
+            _, spans_qry_offsets, words_qry_offsets = get_spans_offsets(
+                input_qry_texts, self.nlp, self.matcher, cache=self.span_cache)
+            _, spans_pos_offsets, words_pos_offsets = get_spans_offsets(
+                input_pos_texts, self.nlp, self.matcher, cache=self.span_cache)
         
         # ============ Tính Loss cho từng sample ============
         total_text_loss = 0.0

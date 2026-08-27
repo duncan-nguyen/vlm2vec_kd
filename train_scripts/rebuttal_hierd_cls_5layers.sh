@@ -13,6 +13,7 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # =========================================================================
 torchrun --standalone \
     --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
+    --dataloader_num_workers 8 \
     --model_name apple/FastVLM-0.5B \
     --teacher_model_name "raghavlite/B3_Qwen2_2B" \
     --lora True \

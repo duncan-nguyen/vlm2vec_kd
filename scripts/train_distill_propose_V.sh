@@ -10,6 +10,7 @@ TRAIN_SCRIPT="train_distill_ddp.py"
 # Dùng torchrun để khởi chạy
 # =========================================================================
 torchrun --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
+    --dataloader_num_workers 8 \
     --model_name "apple/FastVLM-0.5B" \
     --teacher_model_name "raghavlite/B3_Qwen2_2B" \
     --lora True \

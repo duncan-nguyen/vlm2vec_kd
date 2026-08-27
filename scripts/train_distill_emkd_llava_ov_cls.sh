@@ -13,6 +13,7 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # =========================================================================
 torchrun --standalone \
     --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
+    --dataloader_num_workers 8 \
     --model_name "llava-hf/llava-onevision-qwen2-0.5b-ov-hf" \
     --teacher_model_name "raghavlite/B3_Qwen2_2B" \
     --lora True \
