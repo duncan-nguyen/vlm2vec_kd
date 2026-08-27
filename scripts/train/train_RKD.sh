@@ -6,6 +6,12 @@ NUM_GPUS_PER_NODE=1
 # Đường dẫn tới file script training của bạn
 TRAIN_SCRIPT="tools/train_distill_no_deepspeed.py"
 
+# Nơi chứa ảnh MMEB-train. Ghi đè mà không cần sửa file:
+#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/train_RKD.sh
+# Mặc định khớp với thư mục mà scripts/data/download_mmeb.py giải nén ra.
+MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
+
+
 # =========================================================================
 # Dùng torchrun để khởi chạy
 # =========================================================================
@@ -23,7 +29,7 @@ torchrun --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
     --dataset_name "TIGER-Lab/MMEB-train" \
     --subset_name "ImageNet_1K" "N24News" "HatefulMemes" "VOC2007" "SUN397" "OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W" "VisDial" "CIRR" "VisualNews_t2i" "VisualNews_i2t" "MSCOCO_i2t" "MSCOCO_t2i" "NIGHTS" "WebQA" "MSCOCO" \
     --dataset_split "original" \
-    --image_dir "vlm2vec_train/MMEB-train" \
+    --image_dir "$MMEB_TRAIN_DIR" \
     --output_dir "training/RKD" \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 1 \

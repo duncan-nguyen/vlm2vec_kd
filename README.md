@@ -105,6 +105,19 @@ src/                           the library
 
 ## Training
 
+Image locations are not baked into the launchers. Both default to what
+`scripts/data/download_mmeb.py` produces, and either can be overridden per run:
+
+```bash
+MMEB_TRAIN_DIR=/data/MMEB-train bash scripts/train/train_distill_span_weighted_cls.sh
+MMEB_EVAL_DIR=/data/eval_images  bash scripts/eval/eval.sh
+```
+
+| variable | default | used by |
+| --- | --- | --- |
+| `MMEB_TRAIN_DIR` | `./vlm2vec_train/MMEB-train` | every `scripts/train/**` launcher, `prepare_encoded_data.sh` |
+| `MMEB_EVAL_DIR` | `./eval_images` | `scripts/eval/eval.sh`, `eval_2.sh` |
+
 All launchers live under `scripts/train/` (and `scripts/train/rebuttal/` for the
 rebuttal sweep). Run them **from the repo root**:
 

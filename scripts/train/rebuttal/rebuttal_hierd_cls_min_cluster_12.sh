@@ -6,6 +6,12 @@ NUM_GPUS_PER_NODE=1
 # Đường dẫn tới file script training của bạn
 TRAIN_SCRIPT="tools/train_distill_ddp.py"
 
+# Nơi chứa ảnh MMEB-train. Ghi đè mà không cần sửa file:
+#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/rebuttal/rebuttal_hierd_cls_min_cluster_12.sh
+# Mặc định khớp với thư mục mà scripts/data/download_mmeb.py giải nén ra.
+MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
+
+
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 # =========================================================================
@@ -28,7 +34,7 @@ torchrun --standalone \
     --dataset_name "TIGER-Lab/MMEB-train" \
     --subset_name "ImageNet_1K" "N24News" "HatefulMemes" "VOC2007" "SUN397" \
     --dataset_split "original" \
-    --image_dir "./vlm2vec_train/MMEB-train" \
+    --image_dir "$MMEB_TRAIN_DIR" \
     --percent_data 1.0 \
     --output_dir "training/rebuttal_hierd_cls_min_cluster_12" \
     --per_device_train_batch_size 8 \

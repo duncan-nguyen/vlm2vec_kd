@@ -6,6 +6,12 @@ NUM_GPUS_PER_NODE=1
 # Đường dẫn tới file script training của bạn
 TRAIN_SCRIPT="tools/train_distill_ddp.py"
 
+# Nơi chứa ảnh MMEB-train. Ghi đè mà không cần sửa file:
+#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/train_distill_span_weighted_vqa.sh
+# Mặc định khớp với thư mục mà scripts/data/download_mmeb.py giải nén ra.
+MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
+
+
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 # =========================================================================
@@ -28,7 +34,7 @@ torchrun --standalone \
     --dataset_name "TIGER-Lab/MMEB-train" \
     --subset_name "OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W" \
     --dataset_split "original" \
-    --image_dir "vlm2vec_train/MMEB-train" \
+    --image_dir "$MMEB_TRAIN_DIR" \
     --percent_data 1.0 \
     --output_dir "training/meta_span_weighted_vqa" \
     --per_device_train_batch_size 16 \

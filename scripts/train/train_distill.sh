@@ -6,6 +6,12 @@ NUM_GPUS=1
 # Đường dẫn tới file script training của bạn
 TRAIN_SCRIPT="tools/train_distillation.py"
 
+# Nơi chứa ảnh MMEB-train. Ghi đè mà không cần sửa file:
+#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/train_distill.sh
+# Mặc định khớp với thư mục mà scripts/data/download_mmeb.py giải nén ra.
+MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
+
+
 # Đường dẫn tới file config DeepSpeed bạn vừa tạo
 DS_CONFIG="configs/deepspeed/ds_config_stage2.json"
 
@@ -29,7 +35,7 @@ deepspeed --num_gpus=$NUM_GPUS $TRAIN_SCRIPT \
     --dataset_name "TIGER-Lab/MMEB-train" \
     --subset_name "MSCOCO" \
     --dataset_split "original" \
-    --image_dir "vlm2vec_train/MMEB-train" \
+    --image_dir "$MMEB_TRAIN_DIR" \
     --percent_data 0.3 \
     --output_dir "training/deepspeed_projector_cls_v2" \
     --per_device_train_batch_size 8 \
