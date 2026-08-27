@@ -12,18 +12,48 @@ source vlm/bin/activate
 pip install -r requirements.txt
 ```
 ## Download dataset
-1. Download the eval image file zip from huggingface (`optional`) 
+
+`scripts/data/download_mmeb.py` fetches archives in parallel, extracts each one
+while the next is still downloading, resumes interrupted transfers, and skips
+subsets that are already extracted — so re-running it is free.
+
+**Download only what the run needs.** MMEB-train is 47.2 GB in total, but no
+single experiment uses all of it. Point the tool at a launcher and it reads the
+`--subset_name` list straight out of it:
+
 ```bash
-cd VLM_Embed
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-eval/resolve/main/images.zip
-unzip images.zip -d eval_images/
+python scripts/data/download_mmeb.py --for scripts/train/rebuttal/rebuttal_hierd_grounding.sh
 ```
-2. Download train image, it can take > 1 hour to download
+
+or pick a preset:
+
+| preset | subsets | size |
+| --- | --- | --- |
+| `grounding` | MSCOCO | 3.6 GB |
+| `cls` | ImageNet_1K, N24News, HatefulMemes, VOC2007, SUN397 | 11.9 GB |
+| `ret` | VisDial, CIRR, VisualNews_{i2t,t2i}, MSCOCO_{i2t,t2i}, NIGHTS, WebQA | 14.0 GB |
+| `vqa` | OK-VQA, A-OKVQA, DocVQA, InfographicsVQA, ChartQA, Visual7W | 16.6 GB |
+| `all` | everything | 47.2 GB |
+
 ```bash
-cd VLM_Embed
-bash scripts/data/download_traindata.sh
-bash scripts/data/download_traindata_2.sh
+python scripts/data/download_mmeb.py --preset cls
+python scripts/data/download_mmeb.py --preset all --dry-run   # show the plan only
+python scripts/data/download_mmeb.py --eval                   # MMEB-eval images, 7.1 GB
 ```
+
+`bash scripts/data/download_traindata.sh` still works and is equivalent to
+`--preset all`.
+
+**Two things worth setting before a large download:**
+
+```bash
+export HF_TOKEN=hf_...                        # the Hub throttles anonymous traffic
+pip install "huggingface_hub[hf_xet]"         # MMEB is on Xet storage: parallel chunks
+```
+
+`--workers N` (default 4) controls how many archives download at once. It only
+helps if one stream does not already saturate the link — check with `--workers 1`
+first if you are unsure.
 3. Fix some line code 
 
 Because of the error of code in **Transformers library**, run the following script to find the error and comment some lines: 
@@ -53,7 +83,7 @@ configs/
   data/          train_image.yaml
 docs/assets/     figures used by this README
 scripts/
-  data/          dataset download + encoding
+  data/          download_mmeb.py + encoding
   train/         training launchers
     rebuttal/    the rebuttal sweep
   eval/          evaluation launchers

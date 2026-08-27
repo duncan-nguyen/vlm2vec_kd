@@ -1,40 +1,14 @@
-mkdir -p vlm2vec_train/MMEB-train/images
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-train/resolve/main/images_zip/A-OKVQA.zip
-unzip A-OKVQA.zip -d ./vlm2vec_train/MMEB-train/images/
-rm A-OKVQA.zip
-
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-train/resolve/main/images_zip/CIRR.zip
-unzip CIRR.zip -d ./vlm2vec_train/MMEB-train/images/
-rm CIRR.zip
-
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-train/resolve/main/images_zip/ChartQA.zip
-unzip ChartQA.zip -d ./vlm2vec_train/MMEB-train/images/
-rm ChartQA.zip
-
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-train/resolve/main/images_zip/DocVQA.zip
-unzip DocVQA.zip -d ./vlm2vec_train/MMEB-train/images/
-rm DocVQA.zip
-
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-train/resolve/main/images_zip/HatefulMemes.zip
-unzip HatefulMemes.zip -d ./vlm2vec_train/MMEB-train/images/
-rm HatefulMemes.zip
-
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-train/resolve/main/images_zip/ImageNet_1K.zip
-unzip ImageNet_1K.zip -d ./vlm2vec_train/MMEB-train/images/
-rm ImageNet_1K.zip
-
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-train/resolve/main/images_zip/InfographicsVQA.zip
-unzip InfographicsVQA.zip -d ./vlm2vec_train/MMEB-train/images/
-rm InfographicsVQA.zip
-
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-train/resolve/main/images_zip/MSCOCO.zip
-unzip MSCOCO.zip -d ./vlm2vec_train/MMEB-train/images/
-rm MSCOCO.zip
-
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-train/resolve/main/images_zip/MSCOCO_i2t.zip
-unzip MSCOCO_i2t.zip -d ./vlm2vec_train/MMEB-train/images/
-rm MSCOCO_i2t.zip
-
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-train/resolve/main/images_zip/MSCOCO_t2i.zip
-unzip MSCOCO_t2i.zip -d ./vlm2vec_train/MMEB-train/images/
-rm MSCOCO_t2i.zip
+#!/bin/bash
+# Kept as the entry point the README has always referenced. The old body was a
+# serial wget/unzip chain over all 47.2 GB of MMEB-train; download_mmeb.py does
+# the same job in parallel, resumably, and can fetch only the subsets a given
+# experiment needs.
+#
+#   python scripts/data/download_mmeb.py --preset cls        # 11.9 GB
+#   python scripts/data/download_mmeb.py --preset grounding  #  3.6 GB
+#   python scripts/data/download_mmeb.py --preset vqa        # 16.6 GB
+#   python scripts/data/download_mmeb.py --preset ret        # 14.0 GB
+#   python scripts/data/download_mmeb.py --for scripts/train/rebuttal/rebuttal_hierd_grounding.sh
+#
+set -e
+python scripts/data/download_mmeb.py --preset all "$@"
