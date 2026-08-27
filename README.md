@@ -21,8 +21,8 @@ unzip images.zip -d eval_images/
 2. Download train image, it can take > 1 hour to download
 ```bash
 cd VLM_Embed
-bash download_traindata.sh
-bash download_traindata_2.sh
+bash scripts/data/download_traindata.sh
+bash scripts/data/download_traindata_2.sh
 ```
 3. Fix some line code 
 
@@ -35,18 +35,53 @@ if size is not None and ("shortest_edge" not in size or "longest_edge" not in si
 else:
     size = {"shortest_edge": 56 * 56, "longest_edge": 28 * 28 * 1280}
 ```
-Or run `fix_lib.py` to fix: 
-```python 
-python fix_lib.py
+Or run `fix_lib.py` to fix:
+```bash
+python tools/misc/fix_lib.py
+```
+
+
+## Repository layout
+
+Everything is run **from the repo root**; the entrypoints under `tools/` put the
+root on `sys.path` themselves, so no `pip install` step is needed.
+
+```
+configs/
+  deepspeed/     ds_config*.json
+  projector/     projector_config*.json
+  data/          train_image.yaml
+docs/assets/     figures used by this README
+scripts/
+  data/          dataset download + encoding
+  train/         training launchers
+    rebuttal/    the rebuttal sweep
+  eval/          evaluation launchers
+tools/           python entrypoints
+  train_distill_ddp.py         DDP distillation trainer (the one in use)
+  train_distillation.py        DeepSpeed variant
+  train_distill_no_deepspeed.py
+  train_vlm2vec.py             VLM2Vec baseline trainer (was train.py)
+  eval_mmeb.py  eval_mmeb_simple.py  prepare_data.py  visualizer.py
+  eval_baselines/              CLIP / BLIP / SigLIP / OpenCLIP baselines
+  misc/                        download, push_to_hub, fix_lib, test_load_model
+src/                           the library
+  arguments.py  distiller.py  profiling.py  utils.py
+  criterions/                  KD losses (+ text_spans, vision_clustering)
+  data/                        datasets and collators
+  model/                       MMEBModel and the vendored VLM backbones
+  evaluation/                  shared eval helpers
 ```
 
 ## Training
 
-Just run the scripts in folder `scripts`
-- For run RKD: 
+All launchers live under `scripts/train/` (and `scripts/train/rebuttal/` for the
+rebuttal sweep). Run them **from the repo root**:
+
 ```bash
-bash scripts/train_RKD.sh
-bash scripts/train_distill_propose_V.sh
+bash scripts/train/train_RKD.sh
+bash scripts/train/train_distill_propose_V.sh
+bash scripts/train/rebuttal/rebuttal_hierd_grounding.sh
 ```
 ## Profiling the training loop
 
@@ -54,7 +89,7 @@ The training loop is instrumented with a step profiler that is a no-op unless it
 is switched on:
 
 ```bash
-VLM2VEC_PROFILE=1 VLM2VEC_PROFILE_STEPS=100 bash train_scripts/rebuttal_hierd_grounding.sh
+VLM2VEC_PROFILE=1 VLM2VEC_PROFILE_STEPS=100 bash scripts/train/rebuttal/rebuttal_hierd_grounding.sh
 ```
 
 It prints a per-step breakdown (`data_wait`, `to_device`, `forward` ->
@@ -84,8 +119,8 @@ Dataloader workers are set with the standard HF flag, `--dataloader_num_workers`
 
 ## Inference & Evaluation
 1. To evaluate our model on an MMEB dataset (e.g., MSCOCO_i2t), run:
-```bash 
-bash eval.sh
+```bash
+bash scripts/eval/eval.sh
 ```
 
 ## Acknowledgement
