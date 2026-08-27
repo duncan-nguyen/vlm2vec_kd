@@ -21,6 +21,14 @@ from typing import Iterator, List, Tuple, Union
 logger = logging.getLogger(__name__)
 
 def process_image(image, resolution, max_dim=1344):
+    """Resize an image for the encoder.
+
+    Note the named presets do NOT agree with the ones in src/distiller.py used
+    during training ("low" is 128 here and 448 there), so evaluating a checkpoint
+    with a preset silently changes the preprocessing. Pass an explicit pixel
+    budget instead — e.g. --image_resolution 448 — which is handled below with
+    the same "only shrink" semantics that training uses.
+    """
     if image is None:
         return None
     if resolution == "high":
@@ -30,9 +38,12 @@ def process_image(image, resolution, max_dim=1344):
     elif resolution == "low":
         image = image.resize((128, 128))
     else:
-        cur_max_dim = max(image.size)
-        if cur_max_dim > max_dim:
-            image = image.resize((max_dim, max_dim))
+        try:
+            target_max = int(resolution)
+        except (TypeError, ValueError):
+            target_max = max_dim
+        if max(image.size) > target_max:
+            image = image.resize((target_max, target_max))
     return image
 
 

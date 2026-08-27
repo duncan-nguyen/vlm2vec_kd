@@ -63,7 +63,13 @@ def process_image(image, resolution, max_dim=1344):
     elif resolution == "low":
         target_max = 448
     else:
-        target_max = max_dim
+        # Also accept an explicit pixel budget, e.g. --image_resolution 336.
+        # The three named presets cannot express every setting the paper uses
+        # (LLaVA-OneVision is trained at 336, EM-KD/LLaVA-OneVision at 128).
+        try:
+            target_max = int(resolution)
+        except (TypeError, ValueError):
+            target_max = max_dim
 
     # resize if larger than target_max
     if max_side > target_max:

@@ -22,7 +22,7 @@ single experiment uses all of it. Point the tool at a launcher and it reads the
 `--subset_name` list straight out of it:
 
 ```bash
-python scripts/data/download_mmeb.py --for scripts/train/rebuttal/rebuttal_hierd_grounding.sh
+python scripts/data/download_mmeb.py --for scripts/train/hierd/fastvlm_cls.sh
 ```
 
 or pick a preset:
@@ -84,9 +84,8 @@ configs/
 docs/assets/     figures used by this README
 scripts/
   data/          download_mmeb.py + encoding
-  train/         training launchers
-    rebuttal/    the rebuttal sweep
-  eval/          evaluation launchers
+  train/         <method>/<student>_<task>.sh, one per main-table cell
+  eval/          cls.sh / vqa.sh (Table 1 benchmarks)
 tools/           python entrypoints
   train_distill_ddp.py         DDP distillation trainer (the one in use)
   train_distillation.py        DeepSpeed variant
@@ -109,30 +108,79 @@ Image locations are not baked into the launchers. Both default to what
 `scripts/data/download_mmeb.py` produces, and either can be overridden per run:
 
 ```bash
-MMEB_TRAIN_DIR=/data/MMEB-train bash scripts/train/train_distill_span_weighted_cls.sh
-MMEB_EVAL_DIR=/data/eval_images  bash scripts/eval/eval.sh
+MMEB_TRAIN_DIR=/data/MMEB-train bash scripts/train/hierd/fastvlm_cls.sh
+MMEB_EVAL_DIR=/data/eval_images  bash scripts/eval/cls.sh
 ```
 
 | variable | default | used by |
 | --- | --- | --- |
 | `MMEB_TRAIN_DIR` | `./vlm2vec_train/MMEB-train` | every `scripts/train/**` launcher, `prepare_encoded_data.sh` |
-| `MMEB_EVAL_DIR` | `./eval_images` | `scripts/eval/eval.sh`, `eval_2.sh` |
+| `MMEB_EVAL_DIR` | `./eval_images` | `scripts/eval/cls.sh`, `vqa.sh` |
 
-All launchers live under `scripts/train/` (and `scripts/train/rebuttal/` for the
-rebuttal sweep). Run them **from the repo root**:
+`scripts/train/<method>/<student>_<task>.sh` — one launcher per cell of the
+paper's main table (Table 1). Run them **from the repo root**:
+
+```
+scripts/train/
+  hierd/   fastvlm_cls.sh  fastvlm_vqa.sh  llava_onevision_cls.sh  llava_onevision_vqa.sh
+  rkd/     fastvlm_cls.sh
+  emkd/    fastvlm_cls.sh  llava_onevision_cls.sh  llava_onevision_vqa.sh
+  emo/     llava_onevision_cls.sh
+```
 
 ```bash
-bash scripts/train/train_RKD.sh
-bash scripts/train/train_distill_propose_V.sh
-bash scripts/train/rebuttal/rebuttal_hierd_grounding.sh
+bash scripts/train/hierd/fastvlm_cls.sh
 ```
+
+Every launcher is pinned to the paper's configuration — Table 6 (all methods but
+EM-KD), Table 7 (EM-KD), Table 8 (loss weights), Table 9 (layer selection) and
+Table 4 (DBSCAN `min_samples`). Those tables are transcribed into a checker so
+the launchers cannot drift:
+
+```bash
+python tools/check_paper_settings.py         # non-zero exit on any mismatch
+```
+
+HieRD is `--kd_loss_type span_propose_attn`. The student is decided by
+`--model_name`: `MMEBModel.build()` reads the backbone out of that checkpoint's
+config and overwrites whatever `--model_backbone` says.
+
+**Image resolution.** Pass an explicit pixel budget (`448`, `336`, `128`), not
+the `high`/`mid`/`low` presets: the presets disagree between the training and
+evaluation code paths (`low` is 448 in `src/distiller.py` and 128 in
+`src/data/dataset/mmeb_dataset.py`), so a preset silently changes preprocessing
+between the two.
+
+**Coverage.** Table 1 is 7 methods x 2 students x 2 tasks = 28 cells. Nine exist
+here. Missing: every MSE, CKD and SFT cell (no criterion in `src/criterions/`),
+plus RKD and EMO outside their single CLS cell, and EM-KD/FastVLM/VQA.
+
+## Evaluation
+
+```bash
+bash scripts/eval/cls.sh training/hierd_fastvlm_cls/checkpoint-final
+CKPT=training/hierd_llava_onevision_vqa/checkpoint-final \
+  BACKBONE=llava_onevision IMAGE_RESOLUTION=336 bash scripts/eval/vqa.sh
+```
+
+`cls.sh` and `vqa.sh` cover the 5 and 6 Table 1 datasets respectively and report
+Precision@1. `IMAGE_RESOLUTION` must match the value the checkpoint was trained
+at, and `BACKBONE` must match its student.
+
+| variable | default |
+| --- | --- |
+| `BACKBONE` | `llava_qwen2` (FastVLM) |
+| `IMAGE_RESOLUTION` | `448` |
+| `OUT` | `<checkpoint>/mmeb_<task>` |
+| `MMEB_EVAL_DIR` | `./eval_images` |
+
 ## Profiling the training loop
 
 The training loop is instrumented with a step profiler that is a no-op unless it
 is switched on:
 
 ```bash
-VLM2VEC_PROFILE=1 VLM2VEC_PROFILE_STEPS=100 bash scripts/train/rebuttal/rebuttal_hierd_grounding.sh
+VLM2VEC_PROFILE=1 VLM2VEC_PROFILE_STEPS=100 bash scripts/train/hierd/fastvlm_cls.sh
 ```
 
 It prints a per-step breakdown (`data_wait`, `to_device`, `forward` ->
@@ -163,7 +211,7 @@ Dataloader workers are set with the standard HF flag, `--dataloader_num_workers`
 ## Inference & Evaluation
 1. To evaluate our model on an MMEB dataset (e.g., MSCOCO_i2t), run:
 ```bash
-bash scripts/eval/eval.sh
+bash scripts/eval/cls.sh
 ```
 
 ## Acknowledgement

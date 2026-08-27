@@ -1,4 +1,7 @@
 #!/bin/bash
+# HieRD — FastVLM-0.5B, CLS
+# Paper: Table 1 (CLS block, student FastVLM-0.5B); config Tables 6/8/9.
+# Method = --kd_loss_type span_propose_attn
 
 # Số lượng GPU trên mỗi node (máy)
 NUM_GPUS_PER_NODE=1
@@ -7,7 +10,7 @@ NUM_GPUS_PER_NODE=1
 TRAIN_SCRIPT="tools/train_distill_ddp.py"
 
 # Nơi chứa ảnh MMEB-train. Ghi đè mà không cần sửa file:
-#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/rebuttal/rebuttal_hierd_grounding.sh
+#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/hierd/fastvlm_cls.sh
 # Mặc định khớp với thư mục mà scripts/data/download_mmeb.py giải nén ra.
 MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
 
@@ -20,7 +23,7 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 torchrun --standalone \
     --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
     --dataloader_num_workers 8 \
-    --model_name apple/FastVLM-0.5B \
+    --model_name "apple/FastVLM-0.5B" \
     --teacher_model_name "raghavlite/B3_Qwen2_2B" \
     --lora True \
     --teacher_lora True \
@@ -32,11 +35,11 @@ torchrun --standalone \
     --model_backbone "llava_qwen2" \
     --pooling "eos" \
     --dataset_name "TIGER-Lab/MMEB-train" \
-    --subset_name "MSCOCO" \
+    --subset_name "ImageNet_1K" "N24News" "HatefulMemes" "VOC2007" "SUN397" \
     --dataset_split "original" \
     --image_dir "$MMEB_TRAIN_DIR" \
     --percent_data 1.0 \
-    --output_dir "training/rebuttal_hierd_grounding" \
+    --output_dir "training/hierd_fastvlm_cls" \
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 1 \
     --learning_rate 1e-4 \
@@ -54,8 +57,9 @@ torchrun --standalone \
     --kd_weight 2.5 \
     --w_cross_modal_loss 2.5 \
     --kd_loss_type "span_propose_attn" \
-    --image_resolution "low" \
+    --image_resolution "448" \
     --teacher_layer_mapping 0 22 25 28 \
     --student_layer_mapping 0 18 21 24 \
     --split_layer_mapping 0 1 4 4 4 \
+    --min_samples_dbscan_teacher 8 \
     --projector_lr 5e-4

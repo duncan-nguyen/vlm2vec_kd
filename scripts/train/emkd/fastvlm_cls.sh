@@ -7,10 +7,12 @@ NUM_GPUS_PER_NODE=1
 TRAIN_SCRIPT="tools/train_distill_ddp.py"
 
 # Nơi chứa ảnh MMEB-train. Ghi đè mà không cần sửa file:
-#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/train_distill_ret.sh
+#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/emkd/fastvlm_cls.sh
 # Mặc định khớp với thư mục mà scripts/data/download_mmeb.py giải nén ra.
 MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
 
+
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 # =========================================================================
 # Dùng torchrun để khởi chạy
@@ -18,26 +20,27 @@ MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
 torchrun --standalone \
     --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
     --dataloader_num_workers 8 \
-    --model_name apple/FastVLM-0.5B \
+    --model_name "apple/FastVLM-0.5B" \
     --teacher_model_name "raghavlite/B3_Qwen2_2B" \
     --lora True \
     --teacher_lora True \
     --lora_r 64 \
+    --lora_alpha 64 \
     --teacher_lora_r 8 \
     --teacher_pooling "eos" \
     --teacher_backbone "qwen2_vl" \
     --model_backbone "llava_qwen2" \
     --pooling "eos" \
     --dataset_name "TIGER-Lab/MMEB-train" \
-    --subset_name "VisDial" "CIRR" "VisualNews_i2t" "VisualNews_t2i" "MSCOCO_i2t" "MSCOCO_t2i" "NIGHTS" "WebQA" \
+    --subset_name "VOC2007" "ImageNet_1K" "N24News" "SUN397" "HatefulMemes" \
     --dataset_split "original" \
     --image_dir "$MMEB_TRAIN_DIR" \
     --percent_data 1.0 \
-    --output_dir "training/meta_propose_ret" \
-    --per_device_train_batch_size 12 \
+    --output_dir "training/meta_emkd_grounding" \
+    --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 1 \
     --learning_rate 1e-4 \
-    --num_train_epochs 2 \
+    --num_train_epochs 1 \
     --bf16 \
     --save_total_limit 5 \
     --logging_steps 1 \
@@ -49,7 +52,7 @@ torchrun --standalone \
     --lr_scheduler_type "cosine" \
     --warmup_ratio 0.03 \
     --kd_weight 0.3 \
-    --kd_loss_type "proposal_dtw" \
-    --image_resolution "mid" \
-    --projector_config_path "./configs/projector/projector_config.json" \
-    --projector_lr 5e-5
+    --kd_loss_type "em_kd" \
+    --image_resolution "448" \
+    --projector_config_path "./configs/projector/projector_config_emo.json" \
+    --projector_lr 5e-4

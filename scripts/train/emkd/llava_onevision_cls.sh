@@ -4,39 +4,45 @@
 NUM_GPUS_PER_NODE=1
 
 # Đường dẫn tới file script training của bạn
-TRAIN_SCRIPT="tools/train_distill_no_deepspeed.py"
+TRAIN_SCRIPT="tools/train_distill_ddp.py"
 
 # Nơi chứa ảnh MMEB-train. Ghi đè mà không cần sửa file:
-#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/train_RKD.sh
+#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/emkd/llava_onevision_cls.sh
 # Mặc định khớp với thư mục mà scripts/data/download_mmeb.py giải nén ra.
 MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
 
 
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+
 # =========================================================================
 # Dùng torchrun để khởi chạy
 # =========================================================================
-torchrun --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
-    --model_name "apple/FastVLM-0.5B" \
+torchrun --standalone \
+    --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
+    --dataloader_num_workers 8 \
+    --model_name "llava-hf/llava-onevision-qwen2-0.5b-ov-hf" \
     --teacher_model_name "raghavlite/B3_Qwen2_2B" \
     --lora True \
     --teacher_lora True \
-    --lora_r 2 \
+    --lora_r 64 \
+    --lora_alpha 64 \
     --teacher_lora_r 8 \
     --teacher_pooling "eos" \
     --teacher_backbone "qwen2_vl" \
-    --model_backbone "llava_qwen2" \
+    --model_backbone "llava_onevision" \
     --pooling "eos" \
     --dataset_name "TIGER-Lab/MMEB-train" \
-    --subset_name "ImageNet_1K" "N24News" "HatefulMemes" "VOC2007" "SUN397" "OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W" "VisDial" "CIRR" "VisualNews_t2i" "VisualNews_i2t" "MSCOCO_i2t" "MSCOCO_t2i" "NIGHTS" "WebQA" "MSCOCO" \
+    --subset_name "ImageNet_1K" "N24News" "HatefulMemes" "VOC2007" "SUN397" \
     --dataset_split "original" \
     --image_dir "$MMEB_TRAIN_DIR" \
-    --output_dir "training/RKD" \
+    --percent_data 1.0 \
+    --output_dir "training/meta_emkd_llava_ov_cls" \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 1 \
-    --learning_rate 1e-5 \
+    --learning_rate 1e-4 \
     --num_train_epochs 1 \
     --bf16 \
-    --save_total_limit 2 \
+    --save_total_limit 5 \
     --logging_steps 1 \
     --save_strategy "epoch" \
     --seed 42 \
@@ -46,5 +52,7 @@ torchrun --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
     --lr_scheduler_type "cosine" \
     --warmup_ratio 0.03 \
     --kd_weight 0.3 \
-    --kd_loss_type "contrastive_rkd" \
-    --image_resolution "low" 
+    --kd_loss_type "em_kd_llava_ov" \
+    --image_resolution "128" \
+    --projector_config_path "./configs/projector/projector_config_emo.json" \
+    --projector_lr 5e-4
