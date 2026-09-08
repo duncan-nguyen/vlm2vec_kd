@@ -11,19 +11,21 @@ class UniversalLogitDistillation(nn.Module):
     def forward(self, distiller, input_data):
         self.distiller = distiller
         student_model = distiller.student
-        teacher_model = distiller.teacher
-        
+
         student_input_qry = input_data['student_inputs']['qry']
         student_input_pos = input_data['student_inputs']['pos']
-        
-        teacher_input_qry = input_data['teacher_inputs']['qry']
-        teacher_input_pos = input_data['teacher_inputs']['pos']
-        with torch.no_grad():
-            teacher_qry_reps, _, _ = teacher_model.encode_input(teacher_input_qry)
-            teacher_pos_reps, _, _ = teacher_model.encode_input(teacher_input_pos)
 
-        student_qry_reps, _, _ = student_model.encode_input(student_input_qry)
-        student_pos_reps, _, _ = student_model.encode_input(student_input_pos)
+        # encode_input returns four values (pooled, image features, attentions,
+        # hidden states); this unpacked three, so the criterion raised before it
+        # reached its own loss.
+        student_qry_reps, _, _, _ = student_model.encode_input(student_input_qry)
+        student_pos_reps, _, _, _ = student_model.encode_input(student_input_pos)
+
+        # Via the distiller so this also runs against a precomputed teacher
+        # embedding cache; ULD reads nothing but the final embedding.
+        dtype = student_qry_reps.dtype
+        teacher_qry_reps = distiller.encode_teacher(input_data, 'qry', dtype=dtype)
+        teacher_pos_reps = distiller.encode_teacher(input_data, 'pos', dtype=dtype)
 
         scores = student_model.compute_similarity(student_qry_reps, student_pos_reps)
         scores = scores.view(student_qry_reps.size(0), -1)

@@ -83,7 +83,7 @@ configs/
   data/          train_image.yaml
 docs/assets/     figures used by this README
 scripts/
-  data/          download_mmeb.py + encoding
+  data/          download_mmeb.py, precompute_teacher_embeddings.sh + encoding
   train/         <method>/<student>_<task>.sh, one per main-table cell
   eval/          cls.sh / vqa.sh (Table 1 benchmarks)
 tools/           python entrypoints
@@ -92,10 +92,12 @@ tools/           python entrypoints
   train_distill_no_deepspeed.py
   train_vlm2vec.py             VLM2Vec baseline trainer (was train.py)
   eval_mmeb.py  eval_mmeb_simple.py  prepare_data.py  visualizer.py
+  eval_topology.py             teacher-vs-student topology + neighborhood metrics
+  precompute_teacher_embeddings.py  build a frozen-teacher embedding cache
   eval_baselines/              CLIP / BLIP / SigLIP / OpenCLIP baselines
   misc/                        download, push_to_hub, fix_lib, test_load_model
 src/                           the library
-  arguments.py  distiller.py  profiling.py  utils.py
+  arguments.py  distiller.py  profiling.py  utils.py  topology.py  teacher_cache.py
   criterions/                  KD losses (+ text_spans, vision_clustering)
   data/                        datasets and collators
   model/                       MMEBModel and the vendored VLM backbones
@@ -126,6 +128,7 @@ scripts/train/
   rkd/     fastvlm_cls.sh
   emkd/    fastvlm_cls.sh  llava_onevision_cls.sh  llava_onevision_vqa.sh
   emo/     llava_onevision_cls.sh
+  cmtop/   fastvlm_cls.sh            (research line, not a Table 1 cell)
 ```
 
 ```bash
@@ -150,6 +153,32 @@ the `high`/`mid`/`low` presets: the presets disagree between the training and
 evaluation code paths (`low` is 448 in `src/distiller.py` and 128 in
 `src/data/dataset/mmeb_dataset.py`), so a preset silently changes preprocessing
 between the two.
+
+### Cross-modal topological distillation (CMTop)
+
+`--kd_loss_type cmtop` distils the persistent topology of the query-candidate
+retrieval *relation* rather than the geometry of the two point clouds. It is a
+research line on top of the paper's table, not one of its cells; the launcher
+still pins every shared hyperparameter to Table 6 so the ablation is clean.
+
+```bash
+# optional but recommended: encode the frozen teacher once, then every variant
+# and seed trains with no teacher model in the process at all
+TEACHER_CACHE=cache/b3_qwen2_2b_cls bash scripts/data/precompute_teacher_embeddings.sh
+
+TEACHER_CACHE=cache/b3_qwen2_2b_cls VARIANT=cmtop_h0 SEED=42 bash scripts/train/cmtop/fastvlm_cls.sh
+python tools/misc/test_cmtop.py          # self-checks, no GPU or model download
+python tools/misc/test_teacher_cache.py
+```
+
+`--teacher_embedding_cache` also works for `contrastive_rkd` and
+`universal_logit` — any criterion that reads only the teacher's final embedding.
+Criteria that need its hidden states are refused rather than served wrong data.
+
+`VARIANT` selects one row of the ablation (`student_only`, `endpoint`, `vsp`,
+`pointcloud_h0`, `cmtop_h0`, `cmtop_h0_h1`). Design, flags and evaluation:
+[docs/cmtop_implementation.md](docs/cmtop_implementation.md); the research brief
+it implements: [docs/cross_modal_topological_distillation.md](docs/cross_modal_topological_distillation.md).
 
 **Coverage.** Table 1 is 7 methods x 2 students x 2 tasks = 28 cells. Nine exist
 here. Missing: every MSE, CKD and SFT cell (no criterion in `src/criterions/`),

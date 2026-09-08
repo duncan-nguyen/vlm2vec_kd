@@ -88,6 +88,15 @@ class MMEBModel(nn.Module):
     # transformer body, so that is roughly a third of the forward FLOPs spent on
     # a (B, L, 151936) tensor that is thrown away. Keeping one position is the
     # smallest value the HF signature allows.
+    #
+    # qwen2_vl and qwen2_5_vl are deliberately absent even though HF's versions
+    # of both accept the argument: this repo uses the vendored classes in
+    # src/model/vlm_backbone/, whose forwards end in `*args, **kwargs` and would
+    # swallow it without effect. (The vendored qwen2_vl has its `lm_head` call
+    # commented out already, so there is nothing to save there; the vendored
+    # qwen2_5_vl does compute full logits, but reaching them would mean editing
+    # that file.) Set VLM2VEC_FULL_LOGITS=1 to disable this for the two that do
+    # take it.
     _LOGITS_TO_KEEP_BACKBONES = {LLAVA_QWEN2, LLAVA_ONEVISION}
 
     def _encoder_kwargs(self, output_attentions):
@@ -211,9 +220,8 @@ class MMEBModel(nn.Module):
             attention_matrix = hidden_states.attentions if hasattr(hidden_states, 'attentions') else None
             pooled_output = self._pooling(last_hidden_state, input['attention_mask'])
 
-            all_layers_embeds = torch.stack([self._pooling(hidden_state, input['attention_mask']) 
-                                            for hidden_state in hidden_states.hidden_states]).permute(1, 0, 2)
-            
+            # A per-layer pooled stack used to be built here and dropped without
+            # ever being returned. Callers that want it can pool `output_hidden_states`.
             return pooled_output, image_features, attention_matrix, output_hidden_states
         """
             - num_tokens = num_image_tokens - 1 + text_tokens
