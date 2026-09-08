@@ -128,7 +128,7 @@ scripts/train/
   rkd/     fastvlm_cls.sh
   emkd/    fastvlm_cls.sh  llava_onevision_cls.sh  llava_onevision_vqa.sh
   emo/     llava_onevision_cls.sh
-  cmtop/   fastvlm_cls.sh            (research line, not a Table 1 cell)
+  cmtop/   fastvlm_cls.sh + README.md   (research line, not a Table 1 cell)
 ```
 
 ```bash
@@ -176,9 +176,12 @@ python tools/misc/test_teacher_cache.py
 Criteria that need its hidden states are refused rather than served wrong data.
 
 `VARIANT` selects one row of the ablation (`student_only`, `endpoint`, `vsp`,
-`pointcloud_h0`, `cmtop_h0`, `cmtop_h0_h1`). Design, flags and evaluation:
-[docs/cmtop_implementation.md](docs/cmtop_implementation.md); the research brief
-it implements: [docs/cross_modal_topological_distillation.md](docs/cross_modal_topological_distillation.md).
+`pointcloud_h0`, `cmtop_h0`, `cmtop_h0_h1`). Full runbook — environment, data,
+smoke test, the ablation loop and evaluation:
+[scripts/train/cmtop/README.md](scripts/train/cmtop/README.md). Design and flag
+reference: [docs/cmtop_implementation.md](docs/cmtop_implementation.md); the
+research brief it implements:
+[docs/cross_modal_topological_distillation.md](docs/cross_modal_topological_distillation.md).
 
 **Coverage.** Table 1 is 7 methods x 2 students x 2 tasks = 28 cells. Nine exist
 here. Missing: every MSE, CKD and SFT cell (no criterion in `src/criterions/`),

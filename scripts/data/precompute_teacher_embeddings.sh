@@ -35,7 +35,8 @@ torchrun --nproc_per_node="$NUM_GPUS_PER_NODE" tools/precompute_teacher_embeddin
     --per_device_train_batch_size "$BATCH_SIZE" \
     --dataloader_num_workers "${NUM_WORKERS:-4}" \
     --teacher_embedding_cache "$TEACHER_CACHE" \
-    --output_dir "/tmp/precompute_teacher_embeddings"
+    --output_dir "/tmp/precompute_teacher_embeddings" \
+    "$@"
 # No --bf16: MMEBModel.load() already loads the teacher in bfloat16 and the tool
 # autocasts its own forward, so the flag would only add a TrainingArguments
 # device check this tool never needs. --output_dir is likewise unused;

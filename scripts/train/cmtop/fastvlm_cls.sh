@@ -114,4 +114,8 @@ torchrun --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
     --projector_lr 5e-4 \
     "${PROJECTOR_FLAGS[@]+"${PROJECTOR_FLAGS[@]}"}" \
     "${CACHE_FLAGS[@]+"${CACHE_FLAGS[@]}"}" \
-    "${KD_FLAGS[@]}"
+    "${KD_FLAGS[@]}" \
+    "$@"
+# Anything after the script name is forwarded to the trainer and, because these
+# are argparse options, a repeat overrides what is set above. Handy for a smoke
+# test:  bash scripts/train/cmtop/fastvlm_cls.sh --percent_data 0.01
