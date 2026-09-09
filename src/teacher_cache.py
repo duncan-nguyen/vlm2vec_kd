@@ -41,7 +41,13 @@ import os
 import numpy as np
 import torch
 
-FORMAT_VERSION = 1
+# Bumped to 2 when the dataloader started giving libjpeg a target size before
+# decoding (src/data/images.decode_image). The pixels differ from a full-size
+# decode by resampling error, which is enough to move an embedding in the last
+# bits -- not enough to matter for training, but a cache is either the teacher's
+# output for this pipeline or it is not. Version 1 caches are refused rather
+# than silently mixed with version 2 embeddings.
+FORMAT_VERSION = 2
 _EMBEDDINGS = "embeddings.f16"
 _META = "meta.json"
 _DTYPE = np.float16
@@ -63,6 +69,7 @@ _DATA_FINGERPRINT_FIELDS = (
     "percent_data",
     "image_dir",
     "image_resolution",
+    "image_keep_aspect_ratio",
     "max_len",
 )
 

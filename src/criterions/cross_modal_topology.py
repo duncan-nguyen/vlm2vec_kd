@@ -24,11 +24,9 @@ maps -- which is the black-box property the brief asks to preserve.
 """
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
-from torch import nn
 
-from src import dist_utils
+from src.criterions.base import CriterionContext, DistillCriterion
 from src.topology import (
     bipartite_mst_edges,
     cosine_distance_matrix,
@@ -41,22 +39,17 @@ from src.topology import (
 VALID_MODES = {"cross_modal", "point_cloud", "union"}
 
 
-def _pooled(encoder_output):
-    """Pull the pooled embedding out of ``MMEBModel.encode_input``.
+class CrossModalTopologyLoss(DistillCriterion):
+    """``--kd_loss_type cmtop``. See the module docstring for the ablation grid."""
 
-    Most backbones return ``(pooled, image_features, attentions, hidden_states)``
-    but a few return the pooled tensor on its own.
-    """
-    if isinstance(encoder_output, (tuple, list)):
-        return encoder_output[0]
-    return encoder_output
-
-
-class CrossModalTopologyLoss(nn.Module):
     def __init__(self, args):
-        super().__init__()
-        self.args = args
-        self.kd_loss_weight = args.kd_weight
+        super().__init__(args)
+        # The base class computes `contrastive + kd_loss_weight * kd_loss`, but
+        # CMTop applies a different weight to each of its three KD terms (the
+        # endpoint term is the one --kd_weight scales). Neutralise the outer
+        # weight and keep --kd_weight for the endpoint term alone.
+        self.endpoint_weight = args.kd_weight
+        self.kd_loss_weight = 1.0
         self.cmtop_weight = args.cmtop_weight
         self.h0_weight = args.cmtop_h0_weight
         self.h1_weight = args.cmtop_h1_weight
@@ -93,34 +86,10 @@ class CrossModalTopologyLoss(nn.Module):
             )
 
     # ------------------------------------------------------------------ utils
-
-    def _gather(self, student_reps, teacher_reps):
-        """Widen the batch across ranks so the relation graph sees more of it.
-
-        Student side goes through the autograd-aware gather (each rank keeps the
-        gradient of its own slice, exactly as for the contrastive term); the
-        teacher side is constant so it can use the cheap one.
-        """
-        if not dist.is_initialized() or dist.get_world_size() == 1:
-            return student_reps, teacher_reps
-        return (
-            dist_utils.dist_gather(student_reps.contiguous()),
-            dist_utils.dist_gather_nograd(teacher_reps.contiguous()),
-        )
-
-    def _project_teacher(self, distiller, teacher_reps, student_dim):
-        """Map teacher embeddings into the student space for the endpoint term."""
-        projectors = getattr(distiller, "projectors", None)
-        if isinstance(projectors, nn.ModuleDict) and "t2s" in projectors:
-            return projectors["t2s"](teacher_reps)
-        if teacher_reps.size(-1) == student_dim:
-            return teacher_reps
-        raise ValueError(
-            f"endpoint KD needs a teacher->student projector: teacher dim "
-            f"{teacher_reps.size(-1)} != student dim {student_dim}. Pass "
-            f"--projector_config_path with a 't2s' entry, or "
-            f"--cmtop_endpoint_kd none."
-        )
+    #
+    # The batch is widened across ranks (so the relation graph sees more of it)
+    # and the teacher embeddings are fetched by DistillCriterion; both live in
+    # src/criterions/base.py now, shared with every other method.
 
     def _endpoint_loss(self, student_reps, teacher_reps_projected):
         if self.endpoint_kd == "cosine":
@@ -224,49 +193,20 @@ class CrossModalTopologyLoss(nn.Module):
         """
         return F.smooth_l1_loss(1.0 - student_cross, 1.0 - teacher_cross)
 
-    # -------------------------------------------------------------- forward
+    # ----------------------------------------------------------------- kd
 
-    def forward(self, distiller, input_data):
-        student_model = distiller.student
-
-        student_qry_reps = _pooled(
-            student_model.encode_input(input_data["student_inputs"]["qry"])
-        )
-        student_pos_reps = _pooled(
-            student_model.encode_input(input_data["student_inputs"]["pos"])
-        )
-
-        # Through the distiller rather than the teacher model directly: with
-        # --teacher_embedding_cache there is no teacher model to call, and the
-        # embeddings come out of a memmap instead. The student's dtype is what
-        # the projector and the losses expect on both paths.
-        dtype = student_qry_reps.dtype
-        teacher_qry_reps = distiller.encode_teacher(input_data, "qry", dtype=dtype)
-        teacher_pos_reps = distiller.encode_teacher(input_data, "pos", dtype=dtype)
-
-        student_qry, teacher_qry = self._gather(student_qry_reps, teacher_qry_reps)
-        student_pos, teacher_pos = self._gather(student_pos_reps, teacher_pos_reps)
-
-        scores = student_model.compute_similarity(student_qry, student_pos)
-        scores = scores.view(student_qry.size(0), -1)
-        target = torch.arange(scores.size(0), device=scores.device, dtype=torch.long)
-        target = target * (student_qry.size(0) // student_pos.size(0))
-        contrastive_loss = nn.CrossEntropyLoss()(scores / distiller.temperature, target)
-
-        zero = student_qry.new_zeros((), dtype=torch.float32)
+    def kd_loss(self, ctx: CriterionContext):
+        """The three KD terms. Encoding, gathering and the contrastive loss are
+        done by :class:`~src.criterions.base.DistillCriterion`."""
+        student_qry, student_pos = ctx.student_qry, ctx.student_pos
+        teacher_qry, teacher_pos = ctx.teacher_qry, ctx.teacher_pos
+        zero = ctx.zeros()
 
         endpoint_loss = zero
-        if self.endpoint_kd != "none" and self.kd_loss_weight > 0:
-            student_dim = student_qry.size(-1)
+        if self.endpoint_kd != "none" and self.endpoint_weight > 0:
             endpoint_loss = 0.5 * (
-                self._endpoint_loss(
-                    student_qry,
-                    self._project_teacher(distiller, teacher_qry, student_dim),
-                )
-                + self._endpoint_loss(
-                    student_pos,
-                    self._project_teacher(distiller, teacher_pos, student_dim),
-                )
+                self._endpoint_loss(student_qry, ctx.project_teacher(teacher_qry))
+                + self._endpoint_loss(student_pos, ctx.project_teacher(teacher_pos))
             )
 
         # The topological and the VSP terms read the same two matrices; build
@@ -295,17 +235,12 @@ class CrossModalTopologyLoss(nn.Module):
             geometry_loss = self._geometry_loss(student_cross, teacher_cross)
 
         cmtop_loss = self.h0_weight * h0_loss + self.h1_weight * h1_loss
-        kd_loss = (
-            self.kd_loss_weight * endpoint_loss
-            + self.cmtop_weight * cmtop_loss
-            + self.geometry_weight * geometry_loss
-        )
-        total_loss = contrastive_loss + kd_loss
-
         return {
-            "loss": total_loss,
-            "contrastive_loss": contrastive_loss,
-            "kd_loss": kd_loss,
+            "kd_loss": (
+                self.endpoint_weight * endpoint_loss
+                + self.cmtop_weight * cmtop_loss
+                + self.geometry_weight * geometry_loss
+            ),
             "endpoint_loss": endpoint_loss,
             "cmtop_loss": cmtop_loss,
             "cmtop_h0_loss": h0_loss,

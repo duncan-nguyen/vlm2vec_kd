@@ -168,6 +168,12 @@ class DataArguments:
             "help": "for models i.e. LLaVA-next and Qwen, resize images first, none means using original image resolution. This is only works when `--resize_use_processor false`."
         },
     )
+    image_keep_aspect_ratio: bool = field(
+        default=False,
+        metadata={
+            "help": "scale images down preserving the aspect ratio instead of squashing them into a --image_resolution square. Default False, which is what every run in this repo so far used; the square resize distorts non-square images and is almost certainly not what was intended, but changing the default silently would change what an old command line means"
+        },
+    )
     resize_use_processor: bool = field(
         default=False,
         metadata={

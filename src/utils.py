@@ -1,13 +1,19 @@
 import logging
-logging.basicConfig(level = logging.DEBUG,format = '[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s')
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s",
+)
 logger = logging.getLogger(__name__)
-import torch
 import os
+
+import torch
+
 
 def print_rank(message):
     """If distributed is initialized, print the rank."""
     if torch.distributed.is_initialized():
-        logger.info(f'rank{torch.distributed.get_rank()}: ' + message)
+        logger.info(f"rank{torch.distributed.get_rank()}: " + message)
     else:
         logger.info(message)
 
@@ -22,21 +28,35 @@ def print_master(message):
 
 
 def find_latest_checkpoint(output_dir):
-    """ Scan the output directory and return the latest checkpoint path """
+    """Scan the output directory and return the latest checkpoint path.
+
+    Directories are ranked by the trailing number in their name, e.g.
+    `checkpoint-epoch3`. `checkpoint-final` carries no number and is treated as
+    the newest of all, since it is only written once training has finished.
+    Anything else without a number is ignored rather than raising -- the old
+    `int(name.split("-")[-1])` here crashed on `checkpoint-final`, which is the
+    directory every run produces.
+    """
+    import re
+
     if not os.path.exists(output_dir):
         return None
 
-    checkpoints = [
-        os.path.join(output_dir, d) for d in os.listdir(output_dir)
+    def rank(name):
+        if name == "checkpoint-final":
+            return float("inf")
+        match = re.search(r"(\d+)$", name)
+        return int(match.group(1)) if match else None
+
+    ranked = [
+        (rank(d), os.path.join(output_dir, d))
+        for d in os.listdir(output_dir)
         if d.startswith("checkpoint-") and os.path.isdir(os.path.join(output_dir, d))
     ]
-
-    if not checkpoints:
+    ranked = [(r, path) for r, path in ranked if r is not None]
+    if not ranked:
         return None
-
-    # Sort by checkpoint number and return the latest one
-    latest_checkpoint = max(checkpoints, key=lambda x: int(x.split("-")[-1]))
-    return latest_checkpoint
+    return max(ranked)[1]
 
 
 def batch_to_device(batch, device):

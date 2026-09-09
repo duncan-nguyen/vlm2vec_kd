@@ -1,63 +1,64 @@
+"""Universal logit distillation on the pooled embeddings (`--kd_loss_type universal_logit`).
+
+Zero-pads the narrower of the two embedding spaces up to the wider one, then
+matches student and teacher with an MSE symmetrised over the query/positive
+pairing. Reads nothing from the teacher but its final embedding, so it runs
+against `--teacher_embedding_cache`.
+"""
+
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
-class UniversalLogitDistillation(nn.Module):
-    def __init__(self, args):
-        super(UniversalLogitDistillation, self).__init__()
-        self.args = args
-        self.kd_loss_weight = self.args.kd_weight
-        
-    def forward(self, distiller, input_data):
-        self.distiller = distiller
-        student_model = distiller.student
+from src.criterions.base import CriterionContext, DistillCriterion
 
-        student_input_qry = input_data['student_inputs']['qry']
-        student_input_pos = input_data['student_inputs']['pos']
 
-        # encode_input returns four values (pooled, image features, attentions,
-        # hidden states); this unpacked three, so the criterion raised before it
-        # reached its own loss.
-        student_qry_reps, _, _, _ = student_model.encode_input(student_input_qry)
-        student_pos_reps, _, _, _ = student_model.encode_input(student_input_pos)
+class UniversalLogitDistillation(DistillCriterion):
+    def kd_loss(self, ctx: CriterionContext):
+        return self.compute_universal_logit_loss(
+            ctx.student_qry, ctx.student_pos, ctx.teacher_qry, ctx.teacher_pos
+        )
 
-        # Via the distiller so this also runs against a precomputed teacher
-        # embedding cache; ULD reads nothing but the final embedding.
-        dtype = student_qry_reps.dtype
-        teacher_qry_reps = distiller.encode_teacher(input_data, 'qry', dtype=dtype)
-        teacher_pos_reps = distiller.encode_teacher(input_data, 'pos', dtype=dtype)
-
-        scores = student_model.compute_similarity(student_qry_reps, student_pos_reps)
-        scores = scores.view(student_qry_reps.size(0), -1)
-        target = torch.arange(scores.size(0), device=scores.device, dtype=torch.long)
-        target = target * (student_qry_reps.size(0) // student_pos_reps.size(0))
-        contrastive_loss = nn.CrossEntropyLoss()(scores / self.distiller.temperature, target)
-        uld_loss = self.compute_universal_logit_loss(student_qry_reps, student_pos_reps, teacher_qry_reps, teacher_pos_reps)
-        kd_loss = self.kd_loss_weight * uld_loss
-        
-        total_loss = contrastive_loss + kd_loss
-        return {
-            "loss": total_loss, 
-            "contrastive_loss": contrastive_loss,
-            "kd_loss": kd_loss,
-        }
-
-    def compute_universal_logit_loss(self, student_qry_reps, student_pos_reps, teacher_qry_reps, teacher_pos_reps):
+    def compute_universal_logit_loss(
+        self, student_qry_reps, student_pos_reps, teacher_qry_reps, teacher_pos_reps
+    ):
         size_gap = student_qry_reps.shape[-1] - teacher_qry_reps.shape[-1]
+        # The padding is taken as a zeros_like slice of the tensor being padded,
+        # so a gap wider than the narrower embedding cannot be expressed.
+        if abs(size_gap) > min(student_qry_reps.shape[-1], teacher_qry_reps.shape[-1]):
+            raise ValueError(
+                f"universal_logit pads the narrower side up to the wider one, "
+                f"which needs |student_dim - teacher_dim| <= min(dim); got "
+                f"student {student_qry_reps.shape[-1]} and teacher "
+                f"{teacher_qry_reps.shape[-1]}"
+            )
         if size_gap > 0:
             teacher_qry_reps = torch.cat(
-                [teacher_qry_reps, torch.zeros_like(teacher_qry_reps[:, :size_gap])], dim=-1
+                [teacher_qry_reps, torch.zeros_like(teacher_qry_reps[:, :size_gap])],
+                dim=-1,
             )
             teacher_pos_reps = torch.cat(
-                [teacher_pos_reps, torch.zeros_like(teacher_pos_reps[:, :size_gap])], dim=-1
+                [teacher_pos_reps, torch.zeros_like(teacher_pos_reps[:, :size_gap])],
+                dim=-1,
             )
         elif size_gap < 0:
             student_qry_reps = torch.cat(
-                [student_qry_reps, torch.zeros_like(student_qry_reps[:, :(-size_gap)])], dim=-1
+                [
+                    student_qry_reps,
+                    torch.zeros_like(student_qry_reps[:, :(-size_gap)]),
+                ],
+                dim=-1,
             )
             student_pos_reps = torch.cat(
-                [student_pos_reps, torch.zeros_like(student_pos_reps[:, :(-size_gap)])], dim=-1
+                [
+                    student_pos_reps,
+                    torch.zeros_like(student_pos_reps[:, :(-size_gap)]),
+                ],
+                dim=-1,
             )
 
-        uld_loss = (F.mse_loss(student_qry_reps, teacher_qry_reps) + F.mse_loss(student_pos_reps, teacher_pos_reps) + F.mse_loss(student_qry_reps, teacher_pos_reps) + F.mse_loss(student_pos_reps, teacher_qry_reps)) / 4.0
-        return uld_loss
+        return (
+            F.mse_loss(student_qry_reps, teacher_qry_reps)
+            + F.mse_loss(student_pos_reps, teacher_pos_reps)
+            + F.mse_loss(student_qry_reps, teacher_pos_reps)
+            + F.mse_loss(student_pos_reps, teacher_qry_reps)
+        ) / 4.0

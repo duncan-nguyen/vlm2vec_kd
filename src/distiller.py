@@ -4,7 +4,6 @@ import os
 
 import torch
 from datasets import concatenate_datasets, load_dataset
-from PIL import Image
 from torch import nn
 from torch.utils.data import (
     Dataset,
@@ -16,6 +15,7 @@ from transformers import (
 from transformers.training_args import TrainingArguments
 
 from src.arguments import DataArguments, ModelArguments, TrainingArguments
+from src.data.images import decode_image, resize_to_budget, resolve_target
 from src.model.model import MMEBModel
 from src.model.processor import (
     PHI3V,
@@ -55,33 +55,17 @@ POS_MOD_DICT = {
 }
 
 
-def process_image(image, resolution, max_dim=1344):
+def process_image(image, resolution, max_dim=1344, keep_aspect=False):
+    """Shrink one image to the ``--image_resolution`` budget.
+
+    Thin wrapper kept for callers outside the dataset; the logic lives in
+    `src.data.images` so the decode path can share it.
+    """
     if image is None:
         return None
-
-    width, height = image.size
-    max_side = max(width, height)
-
-    if resolution == "high":
-        target_max = 1344
-    elif resolution == "mid":
-        target_max = 672
-    elif resolution == "low":
-        target_max = 448
-    else:
-        # Also accept an explicit pixel budget, e.g. --image_resolution 336.
-        # The three named presets cannot express every setting the paper uses
-        # (LLaVA-OneVision is trained at 336, EM-KD/LLaVA-OneVision at 128).
-        try:
-            target_max = int(resolution)
-        except (TypeError, ValueError):
-            target_max = max_dim
-
-    # resize if larger than target_max
-    if max_side > target_max:
-        image = image.resize((target_max, target_max))
-
-    return image
+    return resize_to_budget(
+        image, resolve_target(resolution, max_dim), keep_aspect=keep_aspect
+    )
 
 
 def create_semi_orthogonal_matrix(tensor):
@@ -119,6 +103,11 @@ class Distiller(nn.Module):
         self.temperature = model_args.temperature
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_args.teacher_model_name
+        )
+        from src.criterions import needs_tokenizer
+
+        self._criterion_needs_tokenizer = needs_tokenizer(
+            getattr(training_args, "kd_loss_type", None)
         )
         # if self.model_args.projector_config_path is not None:
         self.set_projector()
@@ -260,15 +249,13 @@ class Distiller(nn.Module):
         return processor
 
     def forward(self, criterion, batch):
-        if self.training_args.kd_loss_type in [
-            "span_propose_attn",
-            "span_propose",
-            "span_propose_attn_only_phrase",
-        ]:
-            loss = criterion(self, batch, tokenizer=self.tokenizer)
-        else:
-            loss = criterion(self, batch)
-        return loss
+        # `_criterion_needs_tokenizer` is resolved once in __init__ from the
+        # criterion registry rather than from a list of names repeated here --
+        # a new method that needs a tokenizer and is missing from a list like
+        # that fails with a TypeError several minutes into a run.
+        if self._criterion_needs_tokenizer:
+            return criterion(self, batch, tokenizer=self.tokenizer)
+        return criterion(self, batch)
 
     def set_projector(self):
         """
@@ -520,6 +507,28 @@ class DistillationDataset(Dataset):
         if include_teacher is None:
             include_teacher = not getattr(model_args, "teacher_embedding_cache", None)
         self.include_teacher = include_teacher
+
+        # How small the JPEG decoder is allowed to go. Both backbones resize to
+        # the same budget, so one hint covers them -- but PHI3V is exempt from
+        # the resize entirely, so if either side is PHI3V the image has to be
+        # decoded at full resolution and the hint is dropped.
+        self._keep_aspect = bool(getattr(data_args, "image_keep_aspect_ratio", False))
+        self._resize_target = (
+            resolve_target(data_args.image_resolution)
+            if data_args.image_resolution
+            else None
+        )
+        backbones = []
+        if include_student:
+            backbones.append(model_args.model_backbone)
+        if include_teacher:
+            backbones.append(model_args.teacher_backbone)
+        self._decode_target = self._resize_target if PHI3V not in backbones else None
+        print_rank(
+            f"Image pipeline: resize_target={self._resize_target}, "
+            f"decode_hint={self._decode_target}, keep_aspect={self._keep_aspect}"
+        )
+
         train_data = []
 
         for subset in data_args.subset_name:
@@ -569,29 +578,24 @@ class DistillationDataset(Dataset):
         Split out from _get_image so the student and the teacher can share a
         single decode of the same file instead of hitting the disk and the JPEG
         decoder twice per sample.
+
+        The decode is told what resolution the image is headed for, so libjpeg
+        can emit a DCT-scaled image instead of a full-size one that is then
+        thrown away (see `src.data.images.decode_image`). Only when *every*
+        backbone in this run resizes, though: PHI3V keeps the original.
         """
         if not img_path:
             return None
         full_img_path = os.path.join(self.data_args.image_dir, img_path)
-        image = Image.open(full_img_path)
-        image = image.convert("RGB")
-        width, height = image.size
-        MIN_SIZE = 16
-        if width < MIN_SIZE or height < MIN_SIZE:
-            new_width = max(width, MIN_SIZE)
-            new_height = max(height, MIN_SIZE)
-            result = Image.new(image.mode, (new_width, new_height), (0, 0, 0))
-            x_offset = (new_width - width) // 2
-            y_offset = (new_height - height) // 2
-            result.paste(image, (x_offset, y_offset))
-            image = result
-        return image
+        return decode_image(full_img_path, target_max=self._decode_target)
 
     def _resize_for_backbone(self, image, backbone):
         if image is None:
             return None
         if backbone != PHI3V and self.data_args.image_resolution:
-            return process_image(image, self.data_args.image_resolution)
+            return resize_to_budget(
+                image, self._resize_target, keep_aspect=self._keep_aspect
+            )
         return image
 
     def _get_image(self, img_path, backbone):

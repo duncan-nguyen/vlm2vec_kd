@@ -11,6 +11,20 @@ TRAIN_SCRIPT="tools/train_distill_no_deepspeed.py"
 # Mặc định khớp với thư mục mà scripts/data/download_mmeb.py giải nén ra.
 MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
 
+# RKD reads nothing from the teacher but its final embedding, so it can train
+# against a precomputed cache and skip the teacher forward, the teacher's image
+# preprocessing and the teacher's weights in GPU memory entirely:
+#
+#   TEACHER_CACHE=cache/b3_qwen2_2b_cls bash scripts/data/precompute_teacher_embeddings.sh
+#   TEACHER_CACHE=cache/b3_qwen2_2b_cls bash scripts/train/rkd/fastvlm_cls.sh
+#
+# The same cache serves cmtop, contrastive_rkd and universal_logit. Leave unset
+# to run the teacher live.
+TEACHER_CACHE="${TEACHER_CACHE:-}"
+CACHE_FLAGS=()
+if [ -n "$TEACHER_CACHE" ]; then
+  CACHE_FLAGS=(--teacher_embedding_cache "$TEACHER_CACHE")
+fi
 
 # =========================================================================
 # Dùng torchrun để khởi chạy
@@ -50,4 +64,9 @@ torchrun --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
     --kd_weight 0.3 \
     --kd_loss_type "contrastive_rkd" \
     --image_resolution "448" \
-    --projector_lr 5e-4
+    --projector_lr 5e-4 \
+    "${CACHE_FLAGS[@]+"${CACHE_FLAGS[@]}"}" \
+    "$@"
+# Anything after the script name is forwarded to the trainer; because these are
+# argparse options a repeat overrides what is set above, which makes a smoke
+# test one flag away:  bash scripts/train/rkd/fastvlm_cls.sh --percent_data 0.01

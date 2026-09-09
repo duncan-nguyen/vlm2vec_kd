@@ -1,3 +1,13 @@
+"""DeepSpeed variant of the distillation trainer.
+
+No launcher in `scripts/train/` uses this: everything goes through
+`tools/train_distill_ddp.py` or `tools/train_distill_no_deepspeed.py`, which
+share the loop in `src/training/`. Kept for the ZeRO path, but it carries its
+own copy of the loop and does not benefit from work done there -- if you need
+DeepSpeed for a run, prefer teaching `src/training/loop.py` a ZeRO branch over
+extending this file.
+"""
+
 # Run directly from the repo root, e.g. `torchrun tools/train_distillation.py`: put the repo root on
 # sys.path so `import src.…` resolves without installing the project.
 import os as _os
@@ -21,7 +31,7 @@ from huggingface_hub import HfApi, create_repo
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 from transformers import AutoConfig, AutoProcessor, AutoTokenizer, HfArgumentParser
 
@@ -32,6 +42,7 @@ from src.arguments import (
 )
 from src.criterions import build_criterion
 from src.distiller import DistillationCollator, DistillationDataset, Distiller
+from src.training import build_train_dataloader
 from src.utils import print_master, print_rank
 
 
@@ -166,11 +177,11 @@ def finetune(
         rank=dp_rank,
         num_replicas=dp_world_size,
     )
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=training_args.per_device_train_batch_size,
-        collate_fn=collator,
-        sampler=sampler,
+    # Shared builder: workers, pinned memory and prefetch, same as the DDP path.
+    # This used to be a bare DataLoader with num_workers=0, so every JPEG decode
+    # and every processor call happened on the process driving the GPU.
+    train_dataloader = build_train_dataloader(
+        train_dataset, collator, training_args, sampler=sampler
     )
 
     ds_config = {}
@@ -211,15 +222,14 @@ def finetune(
     print(
         sum(p[1].numel() for p in model_engine.named_parameters() if p[1].requires_grad)
     )
-    total_trainable = 0
-    for n, p in model_engine.named_parameters():
-        if p.requires_grad:
-            total_trainable += p.numel()
-            try:
-                p.data = p.data.to(dtype=torch.bfloat16)
-            except Exception as e:
-                # If bf16 not supported, ignore and continue
-                print_rank(f"Warning: cannot cast param {n} to bfloat16: {e}")
+    # Casting `p.data` after deepspeed.initialize() used to happen here. Do not
+    # reintroduce it: ZeRO has already flattened the parameters into its own
+    # contiguous buffers and rebinding `.data` detaches them from those buffers,
+    # so the optimizer updates storage the engine no longer reads. Set the dtype
+    # in the DeepSpeed config (`bf16.enabled`) instead.
+    total_trainable = sum(
+        p.numel() for p in model_engine.parameters() if p.requires_grad
+    )
     print_rank(f"Total trainable parameters: {total_trainable}")
     print_rank(f"model device: {next(model_engine.parameters()).device}")
     model_engine.train()
@@ -311,9 +321,16 @@ def finetune(
 
                 model_engine.step()
 
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                # No torch.cuda.synchronize() here: CUDA is asynchronous by
+                # design and a per-micro-step barrier drains the pipeline for
+                # nothing. The `.item()` calls above already order what needs it.
                 step += 1
+            # One optimizer window has completed: advance the bar every time,
+            # not only on the steps that happen to log.
+            if dist.get_rank() == 0:
+                progress_bar.update(1)
+            epoch_step += 1
+
             if dist.get_rank() == 0 and step % training_args.logging_steps == 0:
                 current_lr = None
                 try:
@@ -343,7 +360,17 @@ def finetune(
                         "lr": f"{current_lr:.6f}" if current_lr is not None else "N/A",
                     }
                 )
-                progress_bar.update(1)
+                # The per-micro-batch lists are the window since the last log
+                # line. They used to be cleared nowhere, so they grew for the
+                # whole epoch, `batch_loss` was a running mean over everything
+                # seen so far, and `epoch_loss += sum(losses)` re-added every
+                # earlier loss on every log line.
+                losses.clear()
+                contrastive_losses.clear()
+                kd_losses.clear()
+                kd_rkd_losses.clear()
+                ot_losses.clear()
+                kd_dtw_losses.clear()
 
                 # if "wandb" in training_args.report_to:
                 #     wandb.log({
@@ -360,8 +387,6 @@ def finetune(
 
                 #     logging_output['micro_step_time'] = []
                 #     logging_output['step_time'] = []
-
-                epoch_step += 1
 
         # End of epoch
         if dist.get_rank() == 0:
@@ -476,7 +501,10 @@ def main():
     data_args: DataArguments
     training_args: TrainingArguments
 
-    torch.backends.cudnn.enabled = False
+    # cuDNN was disabled here outright, which forces every convolution in the
+    # vision towers onto a fallback kernel. If a specific cuDNN algorithm is
+    # misbehaving, `torch.backends.cudnn.benchmark = False` is the narrow fix.
+    torch.backends.cudnn.benchmark = True
     device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
     deepspeed.init_distributed(timeout=timedelta(minutes=1))
 

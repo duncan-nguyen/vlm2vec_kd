@@ -84,24 +84,48 @@ configs/
 docs/assets/     figures used by this README
 scripts/
   data/          download_mmeb.py, precompute_teacher_embeddings.sh + encoding
-  train/         <method>/<student>_<task>.sh, one per main-table cell
+  train/         <method>/<student>_<task>.sh, the full method x student x task
+                 matrix + README.md
   eval/          cls.sh / vqa.sh (Table 1 benchmarks)
 tools/           python entrypoints
-  train_distill_ddp.py         DDP distillation trainer (the one in use)
-  train_distillation.py        DeepSpeed variant
-  train_distill_no_deepspeed.py
+  train_distill_ddp.py         DDP trainer, no autocast (emkd/emo/hierd/pdtw/pproj)
+  train_distill_no_deepspeed.py DDP trainer under bf16 autocast (cmtop/rkd/uld)
+  train_distillation.py        DeepSpeed variant; no launcher uses it
   train_vlm2vec.py             VLM2Vec baseline trainer (was train.py)
   eval_mmeb.py  eval_mmeb_simple.py  prepare_data.py  visualizer.py
   eval_topology.py             teacher-vs-student topology + neighborhood metrics
   precompute_teacher_embeddings.py  build a frozen-teacher embedding cache
   eval_baselines/              CLIP / BLIP / SigLIP / OpenCLIP baselines
-  misc/                        download, push_to_hub, fix_lib, test_load_model
+  misc/                        download, push_to_hub, fix_lib, test_*.py self-checks
 src/                           the library
   arguments.py  distiller.py  profiling.py  utils.py  topology.py  teacher_cache.py
-  criterions/                  KD losses (+ text_spans, vision_clustering)
-  data/                        datasets and collators
+  criterions/                  KD losses
+    registry.py                the one table of methods; add a method here
+    base.py                    DistillCriterion: contrastive + gather + teacher lookup
+    span_common.py             HieRD span helpers: padding-side-aware extraction,
+                               cluster pooling, what may be detached
+  training/                    the training loop, shared by every method
+    entrypoint.py              argument parsing, model/optimizer setup
+    loop.py                    DistillTrainer
+    dataloader.py              worker/prefetch/pinning policy
+    checkpoint.py              saving
+  data/                        datasets, collators, image decoding
   model/                       MMEBModel and the vendored VLM backbones
   evaluation/                  shared eval helpers
+```
+
+Both training entrypoints are three lines over `src/training/entrypoint.py`;
+they differ only in whether the forward runs under bf16 autocast. The loop never
+learns a method's name — see [docs/adding_a_method.md](docs/adding_a_method.md).
+
+### Self-checks
+
+No GPU, no model download, a few seconds each:
+
+```bash
+python tools/misc/test_training_stack.py   # registry, criterion base, loop, images
+python tools/misc/test_cmtop.py            # persistence primitives + the CMTop criterion
+python tools/misc/test_teacher_cache.py    # cache format and what it refuses
 ```
 
 ## Training
@@ -119,21 +143,34 @@ MMEB_EVAL_DIR=/data/eval_images  bash scripts/eval/cls.sh
 | `MMEB_TRAIN_DIR` | `./vlm2vec_train/MMEB-train` | every `scripts/train/**` launcher, `prepare_encoded_data.sh` |
 | `MMEB_EVAL_DIR` | `./eval_images` | `scripts/eval/cls.sh`, `vqa.sh` |
 
-`scripts/train/<method>/<student>_<task>.sh` — one launcher per cell of the
-paper's main table (Table 1). Run them **from the repo root**:
+`scripts/train/<method>/<student>_<task>.sh` — one launcher per
+`method × student × task` cell, for both students (`fastvlm`,
+`llava_onevision`) and both tasks (`cls`, `vqa`). Run them **from the repo
+root**:
 
 ```
-scripts/train/
-  hierd/   fastvlm_cls.sh  fastvlm_vqa.sh  llava_onevision_cls.sh  llava_onevision_vqa.sh
-  rkd/     fastvlm_cls.sh
-  emkd/    fastvlm_cls.sh  llava_onevision_cls.sh  llava_onevision_vqa.sh
-  emo/     llava_onevision_cls.sh
-  cmtop/   fastvlm_cls.sh + README.md   (research line, not a Table 1 cell)
+scripts/train/                   README.md  the matrix + compatibility notes
+  rkd/           contrastive_rkd
+  uld/           universal_logit
+  cmtop/         cmtop                      + README.md, the 6-variant ablation
+  emkd/          em_kd | em_kd_llava_ov     one criterion per student
+  emo/           emo_loss
+  hierd/         span_propose_attn          the paper's HieRD
+  pdtw/          proposal_dtw
+  pproj/         proposal_proj
 ```
+
+Each directory holds `fastvlm_cls.sh`, `fastvlm_vqa.sh`,
+`llava_onevision_cls.sh` and `llava_onevision_vqa.sh`.
 
 ```bash
 bash scripts/train/hierd/fastvlm_cls.sh
 ```
+
+[scripts/train/README.md](scripts/train/README.md) is the operational half: the
+full matrix, the per-student settings each table fixes, the teacher-cache
+recipes, and — the thing to read before launching a method on a student it has
+not been run on — which criteria are safe on which student's token layout.
 
 Every launcher is pinned to the paper's configuration — Table 6 (all methods but
 EM-KD), Table 7 (EM-KD), Table 8 (loss weights), Table 9 (layer selection) and
@@ -164,9 +201,11 @@ still pins every shared hyperparameter to Table 6 so the ablation is clean.
 ```bash
 # optional but recommended: encode the frozen teacher once, then every variant
 # and seed trains with no teacher model in the process at all
-TEACHER_CACHE=cache/b3_qwen2_2b_cls bash scripts/data/precompute_teacher_embeddings.sh
+TASK=cls STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls \
+  bash scripts/data/precompute_teacher_embeddings.sh
 
-TEACHER_CACHE=cache/b3_qwen2_2b_cls VARIANT=cmtop_h0 SEED=42 bash scripts/train/cmtop/fastvlm_cls.sh
+TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls VARIANT=cmtop_h0 SEED=42 \
+  bash scripts/train/cmtop/fastvlm_cls.sh
 python tools/misc/test_cmtop.py          # self-checks, no GPU or model download
 python tools/misc/test_teacher_cache.py
 ```
@@ -183,9 +222,22 @@ reference: [docs/cmtop_implementation.md](docs/cmtop_implementation.md); the
 research brief it implements:
 [docs/cross_modal_topological_distillation.md](docs/cross_modal_topological_distillation.md).
 
-**Coverage.** Table 1 is 7 methods x 2 students x 2 tasks = 28 cells. Nine exist
-here. Missing: every MSE, CKD and SFT cell (no criterion in `src/criterions/`),
-plus RKD and EMO outside their single CLS cell, and EM-KD/FastVLM/VQA.
+**Coverage.** Every method has all four `student × task` launchers: 8 methods x
+2 students x 2 tasks = 32, all checked by `tools/check_paper_settings.py`. Table
+1's MSE, CKD and SFT rows are still missing because no criterion implements them.
+`span_propose` and `span_propose_attn_only_phrase` are HieRD ablations rather
+than methods and have no launchers of their own — run them by passing
+`--kd_loss_type` to a `hierd/` launcher.
+
+Completeness is not the same as validity. `contrastive_rkd`, `universal_logit`
+and `cmtop` read only pooled embeddings; EM-KD has one criterion per student; the
+span criteria (HieRD) derive their offsets from the student's padding side in
+`src/criterions/span_common.py`. The remaining three — `emo_loss`,
+`proposal_dtw`, `proposal_proj` — still slice hidden states by a position
+convention that holds for one student and not the other. Those launchers carry a
+`# !` note in their header naming the assumption, and
+[scripts/train/README.md](scripts/train/README.md#model-pair-compatibility) has
+the table.
 
 ## Evaluation
 
@@ -237,8 +289,59 @@ It prints a per-step breakdown (`data_wait`, `to_device`, `forward` ->
 | `VLM2VEC_NO_MERGE_LORA` | `0` | keep the frozen teacher's LoRA adapters unmerged |
 | `VLM2VEC_FULL_LOGITS` | `0` | run `lm_head` over the whole sequence again instead of the last position |
 
-Dataloader workers are set with the standard HF flag, `--dataloader_num_workers`
-(the training scripts pass `8`).
+### Making a run faster
+
+Roughly in order of how much they buy, for any method:
+
+1. **Precompute the teacher's embeddings.** The teacher is frozen and the data
+   is not augmented, so its embedding for a sample is a pure function of the
+   dataset index. Methods that read nothing else from the teacher —
+   `cmtop`, `contrastive_rkd`, `universal_logit` — can then run with no teacher
+   model in the process: no teacher forward (the larger of the two models), no
+   teacher-side image preprocessing, and its weights out of GPU memory, which is
+   what lets the batch grow.
+
+   ```bash
+   TASK=cls STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls \
+     bash scripts/data/precompute_teacher_embeddings.sh
+   TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls bash scripts/train/cmtop/fastvlm_cls.sh
+   ```
+
+   One cache serves every cache-compatible method, variant and seed *at that
+   cell*. It is fingerprinted against the teacher, the subset list and the image
+   settings and refuses to open under a configuration it was not built for, so
+   the four cache-capable cells (2 students x 2 tasks) each need their own —
+   `TASK` and `STUDENT` select them.
+
+2. **Dataloader workers.** `--dataloader_num_workers` (standard HF flag). The
+   input pipeline — JPEG decode, resize, tokenise, four processor passes per
+   batch — is heavy enough that running it on the process driving the GPU leaves
+   the device idle. With the flag unset it now defaults to 4 rather than 0;
+   `--dataloader_num_workers -1` is the opt-out. Workers are persistent and
+   prefetch 4 batches ahead.
+
+3. **Check where the time actually goes** before tuning anything else:
+   `VLM2VEC_PROFILE=1 VLM2VEC_PROFILE_STEPS=100`. A large `data_wait` means the
+   input pipeline; raise the worker count. A large `forward` means the models,
+   and the teacher cache above is the lever.
+
+4. **`--logging_steps`.** Every log line reads the loss components back from the
+   GPU, which is a synchronisation point. The launchers pass `1`; at `20` the
+   progress bar is just as useful and the loop never stalls for it.
+
+5. **Attentions.** `output_attentions=True` pins a backbone to the eager
+   attention kernel and keeps a `(B, heads, L, L)` tensor per layer alive — on
+   the student side through the backward pass too. Each method declares which
+   side it actually reads in `src/criterions/registry.py`, and everything else
+   runs on SDPA. A new method that leaves those fields at their conservative
+   default is correct but slow.
+
+Image decoding gives libjpeg the target resolution up front, so a source headed
+for `--image_resolution 448` is decoded at a DCT-scaled size instead of in full
+and resized down afterwards — same geometry, a fraction of the decode. Note that
+the resize itself squashes to a square rather than preserving the aspect ratio;
+that is what every run in this repo has done, and `--image_keep_aspect_ratio`
+switches it off without changing the default under existing command lines.
 
 ## Inference & Evaluation
 1. To evaluate our model on an MMEB dataset (e.g., MSCOCO_i2t), run:

@@ -17,6 +17,16 @@ from .vision_clustering import (
     map_teacher_clusters_to_student,
     prepare_vision_cluster_info,
 )
+from .span_common import (
+    compute_intra_cluster_attention_weights,
+    compute_weighted_cluster_mean,
+    extract_attention_for_sample,
+    extract_text_hidden_states,
+    extract_vision_hidden_states,
+    is_left_padded,
+    prepare_span_indices_single,
+    projector_touch,
+)
 
 def cluster_vision_tokens_hdbscan(hidden_states, num_patches_per_row, patch_size, image_width, image_height,
                                   min_cluster_size=3):
@@ -33,157 +43,9 @@ def cluster_vision_tokens_hdbscan(hidden_states, num_patches_per_row, patch_size
 # ====== Vision Clustering Functions ======
 
 
-def prepare_span_indices_single(offset_mapping, spans_offsets):
-    """
-    Chuẩn bị indices cho các token thuộc span - cho single sample.
-    
-    Args:
-        offset_mapping: (TextSeqLen, 2) - character offsets cho mỗi text token
-        spans_offsets: List[Tuple[int, int]] - character offsets của spans cho sample này
-    
-    Returns:
-        dict chứa các indices cần thiết hoặc None nếu không có spans
-    """
-    device = offset_mapping.device
-    TextSeqLen = offset_mapping.size(0)
-    
-    num_spans = len(spans_offsets)
-    if num_spans == 0:
-        return None
 
-    # (num_spans,)
-    span_starts = torch.tensor([s[0] for s in spans_offsets], dtype=torch.long, device=device)
-    span_ends = torch.tensor([s[1] for s in spans_offsets], dtype=torch.long, device=device)
 
-    # (TextSeqLen, 1)
-    offsets_start = offset_mapping[:, 0].unsqueeze(1)
-    offsets_end = offset_mapping[:, 1].unsqueeze(1)
-    
-    # (1, num_spans)
-    span_starts_exp = span_starts.unsqueeze(0)
-    span_ends_exp = span_ends.unsqueeze(0)
 
-    # Token thuộc span nếu character offset của nó nằm trong span
-    # (TextSeqLen, num_spans)
-    token_in_span_map = (offsets_start + 1 >= span_starts_exp) & (offsets_end <= span_ends_exp)
-
-    if not token_in_span_map.any():
-        return None
-
-    # nonzero_indices: (N, 2) với N là số cặp (token, span) hợp lệ
-    nonzero_indices = token_in_span_map.nonzero(as_tuple=False)
-    
-    token_indices = nonzero_indices[:, 0]  # (N,)
-    span_ids = nonzero_indices[:, 1]       # (N,)
-
-    return {
-        'token_indices': token_indices,
-        'span_ids': span_ids,
-        'num_spans': num_spans,
-        'token_to_span_map': token_in_span_map
-    }
-
-def extract_text_hidden_states(hidden_states, sample_idx, num_text_tokens, num_vision_tokens, 
-                                is_teacher=False, has_image=True):
-    """
-    Trích xuất text hidden states từ hidden_states.
-    
-    Args:
-        hidden_states: List of (B, SeqLen, D) hoặc single tensor
-        sample_idx: index của sample trong batch
-        num_text_tokens: số lượng text tokens
-        num_vision_tokens: số lượng vision tokens
-        is_teacher: True nếu là teacher (left padding), False nếu là student (right padding)
-        has_image: True nếu sample có image
-    
-    Returns:
-        List of (num_text_tokens, D) cho mỗi layer
-    """
-    text_hidden_list = []
-    
-    for layer_hidden in hidden_states:
-        if has_image:
-            if is_teacher:
-                # Teacher: left padding, format: [padding] [vision] [text]
-                # Text tokens ở cuối
-                text_hidden = layer_hidden[sample_idx, -num_text_tokens:, :]
-            else:
-                # Student: right padding, format: [vision] [text] [padding]
-                # Vision ở đầu, text tiếp theo
-                text_hidden = layer_hidden[sample_idx, num_vision_tokens:(num_vision_tokens + num_text_tokens), :]
-        else:
-            if is_teacher:
-                # Teacher không có image: [padding] [text]
-                text_hidden = layer_hidden[sample_idx, -num_text_tokens:, :]
-            else:
-                # Student không có image: [text] [padding]
-                text_hidden = layer_hidden[sample_idx, :num_text_tokens, :]
-        
-        text_hidden_list.append(text_hidden)
-    
-    return text_hidden_list
-
-def extract_vision_hidden_states(hidden_states, sample_idx, num_vision_tokens, num_text_tokens, 
-                                 is_teacher=False):
-    """Trích xuất vision hidden states từ hidden states."""
-    
-    vision_hidden_list = []
-    for layer_hidden in hidden_states:
-        if is_teacher:
-            # Teacher: left padding, format: [padding] [vision] [text]
-            # Vision nằm ở vị trí: -(num_vision_tokens + num_text_tokens) đến -num_text_tokens
-            start_idx = -(num_vision_tokens + num_text_tokens)
-            end_idx = -num_text_tokens if num_text_tokens > 0 else None
-            vision_hidden = layer_hidden[sample_idx, start_idx:end_idx, :]
-        else:
-            # Student: right padding, format: [vision] [text] [padding]
-            # Vision ở đầu
-            vision_hidden = layer_hidden[sample_idx, :num_vision_tokens, :]
-        
-        vision_hidden_list.append(vision_hidden)
-    
-    return vision_hidden_list
-
-def extract_attention_for_sample(attention_states, sample_idx, num_vision_tokens, num_text_tokens, is_teacher=True):
-    """Trích xuất attention matrix cho một sample"""
-    attention_list = []
-    for layer_attn in attention_states:
-        if layer_attn is None:
-            attention_list.append(None)
-            continue
-        
-        if len(layer_attn.shape) == 4:
-            # (B, NumHeads, SeqLen, SeqLen)
-            attn = layer_attn[sample_idx].mean(dim=0)  # (SeqLen, SeqLen)
-        else:
-            # (B, SeqLen, SeqLen)
-            attn = layer_attn[sample_idx]  # (SeqLen, SeqLen)
-        
-        if is_teacher:
-            # Teacher: [padding] [vision] [text]
-            # Text tokens: cuối cùng num_text_tokens
-            # Vision tokens: từ -(num_vision + num_text) đến -num_text
-            text_start = -num_text_tokens if num_text_tokens > 0 else attn.size(0)
-            vision_start = -(num_vision_tokens + num_text_tokens)
-            vision_end = -num_text_tokens if num_text_tokens > 0 else None
-            
-            # Attention từ text đến vision: attn[text_rows, vision_cols]
-            if num_text_tokens > 0:
-                text_to_vision_attn = attn[text_start:, vision_start:vision_end]  # (num_text, num_vision)
-            else:
-                text_to_vision_attn = None
-        else:
-            # Student: [vision] [text] [padding]
-            # Vision: 0 đến num_vision
-            # Text: num_vision đến num_vision + num_text
-            text_start = num_vision_tokens
-            text_end = num_vision_tokens + num_text_tokens
-            
-            text_to_vision_attn = attn[text_start:text_end, :num_vision_tokens]  # (num_text, num_vision)
-        
-        attention_list.append(text_to_vision_attn)
-    
-    return attention_list
 
 def compute_cluster_distill_loss_single(projector, s_text_hidden, t_text_hidden, cluster_info):
     """
@@ -837,6 +699,14 @@ class SpanProposeCriterion(nn.Module):
         student_model = distiller.student
         teacher_model = distiller.teacher
         projectors = distiller.projectors  # Giả sử projectors được lưu trong distiller
+
+        # Where the vision and text blocks sit inside a sequence depends on which
+        # side the student's collator padded on -- FastVLM pads right and puts the
+        # expanded image first, LLaVA-OneVision pads left like the teacher. Every
+        # slice below is taken through span_common with this flag.
+        student_left_padded = is_left_padded(
+            getattr(getattr(distiller, "model_args", None), "model_backbone", None)
+        )
         
         student_qry_input = input_data['student_inputs']['qry']
         student_pos_input = input_data['student_inputs']['pos']
@@ -956,7 +826,7 @@ class SpanProposeCriterion(nn.Module):
                 sample_idx=i,
                 num_text_tokens=num_text_qry,
                 num_vision_tokens=num_vision_qry_student,
-                is_teacher=False,
+                left_padded=student_left_padded,
                 has_image=has_image_qry
             )
             
@@ -965,7 +835,7 @@ class SpanProposeCriterion(nn.Module):
                 sample_idx=i,
                 num_text_tokens=num_text_qry,
                 num_vision_tokens=num_vision_qry_teacher,
-                is_teacher=True,
+                left_padded=True,
                 has_image=has_image_qry
             )
             
@@ -998,11 +868,11 @@ class SpanProposeCriterion(nn.Module):
             if has_image_qry:
                 student_qry_vision_hidden_list = extract_vision_hidden_states(
                     student_qry_hidden_states, i, num_vision_qry_student, num_text_qry,
-                    is_teacher=False
+                    left_padded=student_left_padded
                 )
                 teacher_qry_vision_hidden_list = extract_vision_hidden_states(
                     teacher_qry_hidden_states, i, num_vision_qry_teacher, num_text_qry,
-                    is_teacher=True
+                    left_padded=True
                 )
                 
                 (qry_vision_loss, vision_cluster_info_words_qry, student_vision_mapping_words_qry,
@@ -1024,7 +894,7 @@ class SpanProposeCriterion(nn.Module):
                     # Extract attention cho sample này
                     teacher_qry_attention_list = extract_attention_for_sample(
                         teacher_qry_attention, i, num_vision_qry_teacher, num_text_qry,
-                        is_teacher=True
+                        left_padded=True
                     )
                     
                     qry_cross_modal_loss = compute_cross_modal_alignment_loss(
@@ -1073,7 +943,7 @@ class SpanProposeCriterion(nn.Module):
                 sample_idx=i,
                 num_text_tokens=num_text_pos,
                 num_vision_tokens=num_vision_pos_student,
-                is_teacher=False,
+                left_padded=student_left_padded,
                 has_image=has_image_pos
             )
             
@@ -1082,7 +952,7 @@ class SpanProposeCriterion(nn.Module):
                 sample_idx=i,
                 num_text_tokens=num_text_pos,
                 num_vision_tokens=num_vision_pos_teacher,
-                is_teacher=True,
+                left_padded=True,
                 has_image=has_image_pos
             )
             
@@ -1109,11 +979,11 @@ class SpanProposeCriterion(nn.Module):
             if has_image_pos:
                 student_pos_vision_hidden_list = extract_vision_hidden_states(
                     student_pos_hidden_states, i, num_vision_pos_student, num_text_pos,
-                    is_teacher=False
+                    left_padded=student_left_padded
                 )
                 teacher_pos_vision_hidden_list = extract_vision_hidden_states(
                     teacher_pos_hidden_states, i, num_vision_pos_teacher, num_text_pos,
-                    is_teacher=True
+                    left_padded=True
                 )
                 
                 (pos_vision_loss, vision_cluster_info_words_pos, student_vision_mapping_words_pos,
@@ -1134,7 +1004,7 @@ class SpanProposeCriterion(nn.Module):
                 if (text_span_info_words_pos is not None and vision_cluster_info_words_pos is not None):
                     teacher_pos_attention_list = extract_attention_for_sample(
                         teacher_pos_attention, i, num_vision_pos_teacher, num_text_pos,
-                        is_teacher=True
+                        left_padded=True
                     )
                     
                     pos_cross_modal_loss = compute_cross_modal_alignment_loss(
@@ -1175,7 +1045,13 @@ class SpanProposeCriterion(nn.Module):
         rkd_loss = (distance_loss + angle_loss) / 2.0
         
         # ============ Tổng hợp loss ============
-        total_loss = contrastive_loss + self.args.kd_weight * span_loss + self.w_cross_modal * cross_modal_loss + (self.args.kd_weight / 10.0) * rkd_loss
+        # projector_touch contributes exactly zero, but it keeps every rank's set
+        # of used parameters identical when a batch happens to yield no spans or
+        # no vision clusters, which DDP would otherwise abort on.
+        total_loss = (contrastive_loss + self.args.kd_weight * span_loss
+                      + self.w_cross_modal * cross_modal_loss
+                      + (self.args.kd_weight / 10.0) * rkd_loss
+                      + projector_touch(projectors, contrastive_loss))
         
         return {
             'loss': total_loss,

@@ -20,7 +20,6 @@ _sys.path.insert(
 
 from types import SimpleNamespace
 
-import numpy as np
 import torch
 
 from src.teacher_cache import (
@@ -97,7 +96,9 @@ def main():
 
         check(
             "an unfinished cache is refused",
-            _raises(lambda: TeacherEmbeddingCache.load(path), TeacherEmbeddingCacheMismatch),
+            _raises(
+                lambda: TeacherEmbeddingCache.load(path), TeacherEmbeddingCacheMismatch
+            ),
         )
         cache.close(mark_complete=True)
 
@@ -157,12 +158,34 @@ def main():
 
         # --- the refusals that matter -------------------------------------
         for label, changed in (
-            ("teacher", build_fingerprint(_model_args(teacher_model_name="other/model"), _data_args())),
-            ("pooling", build_fingerprint(_model_args(teacher_pooling="mean"), _data_args())),
-            ("subset list", build_fingerprint(_model_args(), _data_args(subset_name=["N24News"]))),
-            ("subset order", build_fingerprint(_model_args(), _data_args(subset_name=["N24News", "ImageNet_1K"]))),
-            ("resolution", build_fingerprint(_model_args(), _data_args(image_resolution="336"))),
-            ("percent_data", build_fingerprint(_model_args(), _data_args(percent_data=0.5))),
+            (
+                "teacher",
+                build_fingerprint(
+                    _model_args(teacher_model_name="other/model"), _data_args()
+                ),
+            ),
+            (
+                "pooling",
+                build_fingerprint(_model_args(teacher_pooling="mean"), _data_args()),
+            ),
+            (
+                "subset list",
+                build_fingerprint(_model_args(), _data_args(subset_name=["N24News"])),
+            ),
+            (
+                "subset order",
+                build_fingerprint(
+                    _model_args(), _data_args(subset_name=["N24News", "ImageNet_1K"])
+                ),
+            ),
+            (
+                "resolution",
+                build_fingerprint(_model_args(), _data_args(image_resolution="336")),
+            ),
+            (
+                "percent_data",
+                build_fingerprint(_model_args(), _data_args(percent_data=0.5)),
+            ),
         ):
             check(
                 f"refuses a cache built with a different {label}",
@@ -176,7 +199,8 @@ def main():
             "a partial fingerprint still checks the keys it has",
             TeacherEmbeddingCache.load(
                 path, fingerprint=build_fingerprint(_model_args())
-            ).num_samples == n
+            ).num_samples
+            == n
             and _raises(
                 lambda: TeacherEmbeddingCache.load(
                     path, fingerprint=build_fingerprint(_model_args(teacher_lora_r=64))
@@ -227,33 +251,45 @@ def main():
 def registry_checks():
     """Every cache-compatible criterion must actually go through encode_teacher.
 
-    Declaring a criterion in TEACHER_EMBEDDING_ONLY_CRITERIONS while it still
-    calls `distiller.teacher` directly would fail only at runtime, with
-    `AttributeError: 'NoneType'` several minutes into a run.
+    Declaring `teacher_embedding_only=True` on a criterion that still calls
+    `distiller.teacher` directly would fail only at runtime, with
+    `AttributeError: 'NoneType' object has no attribute 'eval'` several minutes
+    into a run -- there is no teacher model when the cache is in use.
+
+    Reads the registry rather than parsing the source: since the registry is a
+    plain dataclass table with lazy imports, it can be imported here without
+    dragging in spacy/numba/torch.
     """
-    import re
+    from src.criterions.registry import CRITERIONS
 
-    root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-    init = open(_os.path.join(root, "src", "criterions", "__init__.py")).read()
-
-    declared = set(
-        re.findall(r'"([^"]+)"',
-                   re.search(r"TEACHER_EMBEDDING_ONLY_CRITERIONS = \{(.*?)\}", init, re.S).group(1))
+    root = _os.path.dirname(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     )
-    registry = dict(re.findall(r'"([\w.]+)": (\w+),', init.split("criterion_list = {")[1].split("}")[0]))
-    class_to_file = dict(re.findall(r"from \.(\w+) import (\w+)", init))
-    class_to_file = {cls: mod for mod, cls in class_to_file.items()}
 
-    for name in sorted(declared):
-        module = class_to_file.get(registry.get(name, ""), None)
-        if module is None:
-            check(f"{name} is a registered criterion", False)
+    check("registry is non-empty", len(CRITERIONS) > 0)
+    for name, spec in sorted(CRITERIONS.items()):
+        check(f"{name}: spec name matches its key", spec.name == name)
+
+        path = _os.path.join(root, *spec.module.split(".")) + ".py"
+        check(f"{name}: module {spec.module} exists", _os.path.exists(path))
+        if not _os.path.exists(path):
             continue
-        source = open(_os.path.join(root, "src", "criterions", f"{module}.py")).read()
+        source = open(path).read()
         check(
-            f"{name} reads the teacher through encode_teacher",
-            "distiller.encode_teacher" in source
-            and "distiller.teacher" not in source.replace("distiller.teacher_cache", ""),
+            f"{name}: class {spec.cls} is defined there", f"class {spec.cls}" in source
+        )
+
+        if not spec.teacher_embedding_only:
+            continue
+        # A DistillCriterion subclass gets its teacher embeddings from the base
+        # class, which itself goes through encode_teacher; one that overrides
+        # forward has to call it itself.
+        via_base = "DistillCriterion" in source
+        check(
+            f"{name}: reads the teacher through encode_teacher",
+            (via_base or "distiller.encode_teacher" in source)
+            and "distiller.teacher"
+            not in source.replace("distiller.teacher_cache", ""),
         )
 
 
@@ -264,16 +300,23 @@ def collator_checks():
     real one pulls in peft, qwen_vl_utils and the vendored backbones, none of
     which this check needs.
     """
-    import importlib.util
 
-    root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    root = _os.path.dirname(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    )
     source = open(_os.path.join(root, "src", "distiller.py")).read()
     start = source.index("class DistillationCollator")
     end = source.index("class DistillationDataset")
     namespace = {
-        "torch": torch, "Optional": None, "ProcessorMixin": object,
-        "ModelArguments": object, "DataArguments": object, "TrainingArguments": object,
-        "process_vlm_inputs_fns": {"stub": lambda inputs, processor, max_length: dict(inputs)},
+        "torch": torch,
+        "Optional": None,
+        "ProcessorMixin": object,
+        "ModelArguments": object,
+        "DataArguments": object,
+        "TrainingArguments": object,
+        "process_vlm_inputs_fns": {
+            "stub": lambda inputs, processor, max_length: dict(inputs)
+        },
     }
     exec(compile(source[start:end], "distiller_collator", "exec"), namespace)
     Collator = namespace["DistillationCollator"]
@@ -281,17 +324,27 @@ def collator_checks():
     def row(idx, n=1):
         return {
             "sample_ids": [idx] * n,
-            "student_query_text": ["q"] * n, "student_query_image": [None] * n,
-            "student_pos_text": ["p"] * n, "student_pos_image": [None] * n,
-            "teacher_query_text": ["q"] * n, "teacher_query_image": [None] * n,
-            "teacher_pos_text": ["p"] * n, "teacher_pos_image": [None] * n,
+            "student_query_text": ["q"] * n,
+            "student_query_image": [None] * n,
+            "student_pos_text": ["p"] * n,
+            "student_pos_image": [None] * n,
+            "teacher_query_text": ["q"] * n,
+            "teacher_query_image": [None] * n,
+            "teacher_pos_text": ["p"] * n,
+            "teacher_pos_image": [None] * n,
         }
 
-    model_args = SimpleNamespace(model_backbone="stub", teacher_backbone="stub",
-                                 teacher_embedding_cache=None)
+    model_args = SimpleNamespace(
+        model_backbone="stub", teacher_backbone="stub", teacher_embedding_cache=None
+    )
     data_args = SimpleNamespace(max_len=None)
-    common = dict(student_processor=None, teacher_processor=None, model_args=model_args,
-                  data_args=data_args, training_args=None)
+    common = dict(
+        student_processor=None,
+        teacher_processor=None,
+        model_args=model_args,
+        data_args=data_args,
+        training_args=None,
+    )
 
     batch = Collator(**common)([row(3), row(7), row(11)])
     check(
@@ -304,12 +357,16 @@ def collator_checks():
         "student_inputs" in batch and "teacher_inputs" in batch,
     )
 
-    cached_args = SimpleNamespace(model_backbone="stub", teacher_backbone="stub",
-                                  teacher_embedding_cache="/some/cache")
+    cached_args = SimpleNamespace(
+        model_backbone="stub",
+        teacher_backbone="stub",
+        teacher_embedding_cache="/some/cache",
+    )
     cached = Collator(**{**common, "model_args": cached_args})([row(1), row(2)])
     check(
         "a teacher embedding cache turns teacher processing off automatically",
-        "teacher_inputs" not in cached and "student_inputs" in cached
+        "teacher_inputs" not in cached
+        and "student_inputs" in cached
         and cached["sample_ids"].tolist() == [1, 2],
     )
 
@@ -356,9 +413,12 @@ def criterion_against_cache(cache, qry, pos, dim):
     """CMTop with no teacher model at all, reading embeddings from the memmap."""
     import importlib.util
 
-    root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    root = _os.path.dirname(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    )
     spec = importlib.util.spec_from_file_location(
-        "cmtop_criterion", _os.path.join(root, "src", "criterions", "cross_modal_topology.py")
+        "cmtop_criterion",
+        _os.path.join(root, "src", "criterions", "cross_modal_topology.py"),
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -408,9 +468,16 @@ def criterion_against_cache(cache, qry, pos, dim):
         # the criterion must not reach for one.
     }
     args = SimpleNamespace(
-        kd_weight=1.0, cmtop_weight=1.0, cmtop_mode="cross_modal", cmtop_h0_weight=1.0,
-        cmtop_h1_weight=0.1, cmtop_h1_topk=0, cmtop_endpoint_kd="cosine",
-        cmtop_geometry_weight=0.5, cmtop_normalize_scale=False, cmtop_reduction="mean",
+        kd_weight=1.0,
+        cmtop_weight=1.0,
+        cmtop_mode="cross_modal",
+        cmtop_h0_weight=1.0,
+        cmtop_h1_weight=0.1,
+        cmtop_h1_topk=0,
+        cmtop_endpoint_kd="cosine",
+        cmtop_geometry_weight=0.5,
+        cmtop_normalize_scale=False,
+        cmtop_reduction="mean",
     )
     out = module.CrossModalTopologyLoss(args)(distiller, inputs)
     check(
@@ -421,7 +488,10 @@ def criterion_against_cache(cache, qry, pos, dim):
     out["loss"].backward()
     check(
         "the student still gets a gradient on the cached path",
-        all(p.grad is not None and torch.isfinite(p.grad).all() for p in student.parameters()),
+        all(
+            p.grad is not None and torch.isfinite(p.grad).all()
+            for p in student.parameters()
+        ),
     )
 
     # The cached teacher embeddings must be the ones the criterion saw.

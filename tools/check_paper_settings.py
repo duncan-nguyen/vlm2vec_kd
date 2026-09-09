@@ -14,6 +14,11 @@ re-reading the PDF. Run from the repo root:
 
     python tools/check_paper_settings.py          # exits non-zero on mismatch
     python tools/check_paper_settings.py --list   # just print what each uses
+
+Every scripts/train/<method>/<student>_<task>.sh is checked, so a new method or a
+new (student, task) cell is covered the moment its launcher exists. Which table
+applies is decided by --kd_loss_type and --model_name, never by the directory
+name.
 """
 
 import argparse
@@ -42,12 +47,17 @@ TABLE_7 = {
     FASTVLM:  dict(TABLE_6[FASTVLM],  per_device_train_batch_size="8", image_resolution="448"),
     LLAVA_OV: dict(TABLE_6[LLAVA_OV], per_device_train_batch_size="4", image_resolution="128"),
 }
-# Tables 8/9/4, HieRD only
+# Tables 8/9/4, the HieRD span-proposal family only
 HIERD_EXTRA = dict(kd_weight="2.5",                 # lambda_struct
                    w_cross_modal_loss="2.5",        # lambda_struct also scales L_cross
                    student_layer_mapping="0 18 21 24",   # Table 9
                    split_layer_mapping="0 1 4 4 4",
                    min_samples_dbscan_teacher="8")       # Table 4
+# All three span criteria read the same layer-mapping and loss-weight arguments,
+# so all three are held to Tables 8/9. `span_propose` is the exception on Table 4:
+# it never reads --min_samples_dbscan_teacher (only the two attention-weighted
+# variants do), so its launchers are not required to pass one.
+HIERD_FAMILY = ("span_propose", "span_propose_attn", "span_propose_attn_only_phrase")
 
 # The whole training set is used; no subsampling is described in the paper.
 COMMON = dict(percent_data="1.0")
@@ -73,8 +83,10 @@ def check(path):
 
     expected = dict(TABLE_7[model] if kd in ("em_kd", "em_kd_llava_ov") else TABLE_6[model])
     expected.update(COMMON)
-    if kd == "span_propose_attn":
+    if kd in HIERD_FAMILY:
         expected.update(HIERD_EXTRA)
+        if kd == "span_propose":
+            del expected["min_samples_dbscan_teacher"]
 
     # the task is implied by the directory-independent subset list
     subs = (flag(src, "subset_name") or "").split()
