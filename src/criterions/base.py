@@ -137,6 +137,24 @@ class DistillCriterion(nn.Module):
         """
         raise NotImplementedError
 
+    # -- optional ---------------------------------------------------------
+
+    def build_parameters(self, distiller):
+        """Create whatever weights this method trains alongside the student.
+
+        A no-op for almost every criterion: the shared KD projectors live on the
+        `Distiller` and are configured by ``--projector_config_path``. A method
+        whose projections are part of the *method* rather than of the
+        teacher/student pair -- TALAS has one per anchored layer, sized from
+        ``--talas_num_tamd_layers`` -- builds them here instead.
+
+        `src.training.entrypoint` calls this once, after the `Distiller` exists
+        (so `student_hidden_dim` / `teacher_hidden_dim` are known) and before the
+        optimizer is built. Anything registered on ``self`` then gets its own
+        parameter group, is moved to the device and is covered by DDP; anything
+        created later is none of those things.
+        """
+
     # -- the shared half --------------------------------------------------
 
     def forward(self, distiller, input_data, **kwargs):

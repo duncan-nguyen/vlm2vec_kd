@@ -10,6 +10,7 @@ So most of what is checked here is refusal, not round-tripping.
 
 import json
 import os as _os
+import re as _re
 import shutil
 import sys as _sys
 import tempfile
@@ -285,11 +286,16 @@ def registry_checks():
         # class, which itself goes through encode_teacher; one that overrides
         # forward has to call it itself.
         via_base = "DistillCriterion" in source
+        # What is forbidden is reaching for the teacher *model*, which is None
+        # under the cache. `distiller.teacher_cache` and
+        # `distiller.teacher_hidden_dim` are ordinary attributes and stay
+        # readable, so match `.teacher` only where an identifier does not
+        # continue.
+        touches_teacher_model = _re.search(r"distiller\.teacher(?!\w)", source)
         check(
             f"{name}: reads the teacher through encode_teacher",
             (via_base or "distiller.encode_teacher" in source)
-            and "distiller.teacher"
-            not in source.replace("distiller.teacher_cache", ""),
+            and not touches_teacher_model,
         )
 
 

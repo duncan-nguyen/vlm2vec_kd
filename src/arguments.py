@@ -367,6 +367,69 @@ class TrainingArguments(TrainingArguments):
             "help": "mean (per-bar, batch-size independent) or sum (textbook W_2^2) over the matched bars"
         },
     )
+    # new args for TALAS (kd_loss_type="talas"); see docs/talas_implementation.md
+    talas_contrastive_weight: float = field(
+        default=1.0,
+        metadata={
+            "help": "lambda_1: weight of the contrastive term, which stands in for the paper's unsupervised SimCSE loss. The paper's 0.001 is calibrated for the dropout objective on unpaired text; 1.0 is what every other method in this repo gives the contrastive term"
+        },
+    )
+    talas_tamd_weight: float = field(
+        default=0.75,
+        metadata={
+            "help": "lambda_2: weight of L_TAMD, the teacher-anchored multi-layer term (paper: 0.75)"
+        },
+    )
+    talas_lasd_weight: float = field(
+        default=1.0,
+        metadata={
+            "help": "lambda_3: weight of L_LASD, the layer-aligned self-distillation term (paper: 1)"
+        },
+    )
+    talas_num_tamd_layers: int = field(
+        default=2,
+        metadata={
+            "help": "K = k+1: how many of the student's top layers are anchored to the teacher embedding, one learnable projection each. The paper's ablation peaks at 2 and degrades past 4"
+        },
+    )
+    talas_num_lasd_layers: int = field(
+        default=0,
+        metadata={
+            "help": "how many adjacent-layer pairs L_LASD covers, counted down from the top; 0 (default) means every pair, which is where the paper's ablation is best"
+        },
+    )
+    talas_lasd_detach_guide: bool = field(
+        default=True,
+        metadata={
+            "help": "treat the upper layer's relation matrix as a constant guide, so L_LASD propagates top-down as section 3.2 describes. False makes it a symmetric smoothness penalty, which is eq. 5 read literally"
+        },
+    )
+    talas_lasd_reduction: str = field(
+        default="sum",
+        metadata={
+            "help": "sum (the squared Frobenius norm of eq. 5, but batch-size dependent) or mean (per-entry, batch-size independent) over the relation-matrix difference"
+        },
+    )
+    # Sharpness-aware optimization. TALAS's third component, but method-independent:
+    # any --kd_loss_type can be trained with it.
+    sharpness_aware: str = field(
+        default="none",
+        metadata={
+            "help": "wrap the optimizer in a sharpness-aware ascent/descent step: none, sam (Foret et al.) or asam (Kwon et al., what TALAS uses). Doubles the forward/backward passes per optimizer step"
+        },
+    )
+    sam_rho: float = field(
+        default=0.5,
+        metadata={
+            "help": "neighbourhood radius for --sharpness_aware. ASAM measures it in units of |w| and uses 0.5-2.0; plain SAM wants something like 0.05"
+        },
+    )
+    asam_eta: float = field(
+        default=0.01,
+        metadata={
+            "help": "the |w| + eta floor in ASAM's parameter-wise scaling, so a weight at zero still gets a neighbourhood. Ignored by --sharpness_aware sam"
+        },
+    )
 
 
 @dataclass

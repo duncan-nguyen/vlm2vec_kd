@@ -86,6 +86,15 @@ _SPECS = (
         summary="Cross-modal topological distillation: H0/H1 of the retrieval relation.",
     ),
     CriterionSpec(
+        name="talas",
+        module="src.criterions.talas",
+        cls="TALASLoss",
+        student_attentions=False,
+        teacher_attentions=False,
+        teacher_embedding_only=True,
+        summary="TALAS: teacher-anchored top layers + layer-aligned self-distillation.",
+    ),
+    CriterionSpec(
         name="universal_logit",
         module="src.criterions.universal_logit_distillation",
         cls="UniversalLogitDistillation",

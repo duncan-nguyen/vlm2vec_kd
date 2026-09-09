@@ -22,7 +22,7 @@ python tools/check_paper_settings.py     # non-zero exit on any drift
 
 ## The matrix
 
-Eight methods × two students × two tasks = 32 launchers. The teacher is
+Nine methods × two students × two tasks = 36 launchers. The teacher is
 `raghavlite/B3_Qwen2_2B` (`qwen2_vl`, hidden 1536) in every cell; both students
 are 0.5B with hidden 896, so `--student_hidden_dim` / `--teacher_hidden_dim`
 never need setting.
@@ -32,6 +32,7 @@ never need setting.
 | `rkd/` | `contrastive_rkd` | autocast | – | yes |
 | `uld/` | `universal_logit` | autocast | – | yes |
 | `cmtop/` | `cmtop` | autocast | `projector_config_emo.json` | yes |
+| `talas/` | `talas` | autocast | *(built by the criterion)* | yes |
 | `emkd/` | `em_kd` \| `em_kd_llava_ov` | ddp | `projector_config_emo.json` | no |
 | `emo/` | `emo_loss` | ddp | `projector_config_emo.json` | no |
 | `hierd/` | `span_propose_attn` | ddp | per-layer list | no |
@@ -46,7 +47,11 @@ its numbers remain comparable.
 *projector*: the span criteria index `distiller.projectors` **by layer**, so they
 must not pass `--projector_config_path` — the list form is built from
 `--teacher_layer_mapping`. `pdtw` / `pproj` need the `t2s_img` and `t2s_txt`
-entries, which only the full `projector_config.json` has. Everything else needs
+entries, which only the full `projector_config.json` has. `talas` builds its own
+projections — one per teacher-anchored layer, sized from
+`--talas_num_tamd_layers` — through `DistillCriterion.build_parameters`, and must
+not pass `--projector_config_path` either: a `t2s` registered and never used
+makes DDP abort with "expected to have finished reduction". Everything else needs
 just `t2s`.
 
 `src/criterions/registry.py` holds two more span criteria that no launcher
@@ -93,7 +98,11 @@ That gives three groups of methods:
 
 **1. Layout-independent — correct for both students.** `contrastive_rkd`,
 `universal_logit`, `cmtop` read nothing but the pooled query/candidate
-embeddings. These are also the three that can train from a teacher cache.
+embeddings. `talas` reads one pooled embedding *per student layer*, but obtains
+each through the student's own pooling and attention mask — the identical call
+the model makes for its final embedding — so it inherits that pooling's layout
+handling rather than assuming one. These four are also the ones that can train
+from a teacher cache.
 
 **2. Layout-specific, with a variant per student.** EM-KD ships as two
 criteria: `em_kd` slices the student from the front (`[vision][text][pad]`) and
@@ -125,7 +134,7 @@ a cell reached by overriding `--kd_loss_type` on another method's launcher.
 
 ## Teacher embedding cache
 
-`contrastive_rkd`, `universal_logit` and `cmtop` read nothing from the teacher
+`contrastive_rkd`, `universal_logit`, `cmtop` and `talas` read nothing from the teacher
 but its final embedding, so they can train with **no teacher model in the
 process**: no teacher forward, no teacher-side image preprocessing, no teacher
 weights on the device.
@@ -181,6 +190,10 @@ Every generated launcher accepts:
 The `cmtop/` launchers add `VARIANT` (`student_only`, `endpoint`, `vsp`,
 `pointcloud_h0`, `cmtop_h0`, `cmtop_h0_h1`), `CMTOP_WEIGHT` and `KD_WEIGHT` —
 see [cmtop/README.md](cmtop/README.md).
+
+The `talas/` launchers add `VARIANT` (`talas`, `no_asam`, `sam`, `no_lasd`,
+`no_tamd`), `TALAS_CONTRASTIVE_WEIGHT`, `TAMD_WEIGHT`, `LASD_WEIGHT`,
+`TAMD_LAYERS` and `SAM_RHO` — see [talas/README.md](talas/README.md).
 
 `TORCH_DISTRIBUTED_DEBUG=DETAIL` is not exported by the newer launchers; export
 it yourself when you need DDP's bucket diagnostics, since it costs speed.

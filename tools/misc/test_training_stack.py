@@ -351,13 +351,13 @@ def grad_accumulation_checks():
         seen = []
         original = trainer._optimizer_step
 
-        def spy():
+        def spy(window_batches=None):
             seen.append(
                 torch.cat(
                     [p.grad.reshape(-1).clone() for p in distiller.student.parameters()]
                 )
             )
-            original()
+            original(window_batches)
 
         trainer._optimizer_step = spy
         trainer.run_epoch(0)

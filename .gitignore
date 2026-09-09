@@ -7,5 +7,6 @@
 __pycache__
 .venv
 vlm
-training/
+# the default --output_dir; anchored so it does not also swallow src/training/
+/training/
 .DS_Store

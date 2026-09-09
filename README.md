@@ -89,7 +89,7 @@ scripts/
   eval/          cls.sh / vqa.sh (Table 1 benchmarks)
 tools/           python entrypoints
   train_distill_ddp.py         DDP trainer, no autocast (emkd/emo/hierd/pdtw/pproj)
-  train_distill_no_deepspeed.py DDP trainer under bf16 autocast (cmtop/rkd/uld)
+  train_distill_no_deepspeed.py DDP trainer under bf16 autocast (cmtop/rkd/uld/talas)
   train_distillation.py        DeepSpeed variant; no launcher uses it
   train_vlm2vec.py             VLM2Vec baseline trainer (was train.py)
   eval_mmeb.py  eval_mmeb_simple.py  prepare_data.py  visualizer.py
@@ -125,6 +125,7 @@ No GPU, no model download, a few seconds each:
 ```bash
 python tools/misc/test_training_stack.py   # registry, criterion base, loop, images
 python tools/misc/test_cmtop.py            # persistence primitives + the CMTop criterion
+python tools/misc/test_talas.py            # TALAS's two losses, ASAM, the two-pass step
 python tools/misc/test_teacher_cache.py    # cache format and what it refuses
 ```
 
@@ -153,6 +154,7 @@ scripts/train/                   README.md  the matrix + compatibility notes
   rkd/           contrastive_rkd
   uld/           universal_logit
   cmtop/         cmtop                      + README.md, the 6-variant ablation
+  talas/         talas                      + README.md, the 5-variant ablation
   emkd/          em_kd | em_kd_llava_ov     one criterion per student
   emo/           emo_loss
   hierd/         span_propose_attn          the paper's HieRD
@@ -210,9 +212,10 @@ python tools/misc/test_cmtop.py          # self-checks, no GPU or model download
 python tools/misc/test_teacher_cache.py
 ```
 
-`--teacher_embedding_cache` also works for `contrastive_rkd` and
-`universal_logit` — any criterion that reads only the teacher's final embedding.
-Criteria that need its hidden states are refused rather than served wrong data.
+`--teacher_embedding_cache` also works for `contrastive_rkd`,
+`universal_logit` and `talas` — any criterion that reads only the teacher's final
+embedding. Criteria that need its hidden states are refused rather than served
+wrong data.
 
 `VARIANT` selects one row of the ablation (`student_only`, `endpoint`, `vsp`,
 `pointcloud_h0`, `cmtop_h0`, `cmtop_h0_h1`). Full runbook — environment, data,
@@ -222,15 +225,42 @@ reference: [docs/cmtop_implementation.md](docs/cmtop_implementation.md); the
 research brief it implements:
 [docs/cross_modal_topological_distillation.md](docs/cross_modal_topological_distillation.md).
 
-**Coverage.** Every method has all four `student × task` launchers: 8 methods x
-2 students x 2 tasks = 32, all checked by `tools/check_paper_settings.py`. Table
+### TALAS
+
+`--kd_loss_type talas` is the TALAS baseline
+([docs/baseline methods/TALAS.pdf](docs/baseline%20methods/TALAS.pdf)): anchor
+the student's top `K` layers to the teacher's final embedding through one
+learnable projection each (`L_TAMD`), propagate that geometry down the student
+itself by aligning adjacent layers' batch relation matrices (`L_LASD`), and
+optimise with adaptive sharpness-aware minimization.
+
+```bash
+TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls VARIANT=talas SEED=42 \
+  bash scripts/train/talas/fastvlm_cls.sh
+python tools/misc/test_talas.py           # self-checks, no GPU or model download
+```
+
+ASAM is `--sharpness_aware asam` and is **not** TALAS-specific — it wraps the
+optimizer, so any `--kd_loss_type` can use it. It costs two forward/backward
+passes per optimizer step.
+
+Two deliberate departures from the paper, both documented in
+[docs/talas_implementation.md](docs/talas_implementation.md): the paper's
+unsupervised SimCSE term is replaced by this repo's supervised in-batch
+contrastive loss (and left at weight 1 rather than the paper's 0.001, so the
+baseline stays comparable to the others), and the launchers use Table 6's shared
+per-student settings rather than TALAS's own text-training recipe. Runbook:
+[scripts/train/talas/README.md](scripts/train/talas/README.md).
+
+**Coverage.** Every method has all four `student × task` launchers: 9 methods x
+2 students x 2 tasks = 36, all checked by `tools/check_paper_settings.py`. Table
 1's MSE, CKD and SFT rows are still missing because no criterion implements them.
 `span_propose` and `span_propose_attn_only_phrase` are HieRD ablations rather
 than methods and have no launchers of their own — run them by passing
 `--kd_loss_type` to a `hierd/` launcher.
 
-Completeness is not the same as validity. `contrastive_rkd`, `universal_logit`
-and `cmtop` read only pooled embeddings; EM-KD has one criterion per student; the
+Completeness is not the same as validity. `contrastive_rkd`, `universal_logit`,
+`cmtop` and `talas` read only pooled embeddings; EM-KD has one criterion per student; the
 span criteria (HieRD) derive their offsets from the student's padding side in
 `src/criterions/span_common.py`. The remaining three — `emo_loss`,
 `proposal_dtw`, `proposal_proj` — still slice hidden states by a position

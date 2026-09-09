@@ -58,6 +58,32 @@ its final embedding sets `fetch_teacher_reps = False` on the class and calls
 `ctx.distiller.teacher.encode_input(ctx.batch["teacher_inputs"][side])` itself,
 inside `torch.no_grad()`.
 
+### If the method has weights of its own
+
+Most don't: the shared KD projectors live on the `Distiller` and are configured
+by `--projector_config_path`. A method whose projections are part of the *method*
+-- TALAS builds one per teacher-anchored layer, sized from a flag rather than
+from a config file -- creates them in `build_parameters`:
+
+```python
+    def build_parameters(self, distiller):
+        self.projections = nn.ModuleList(
+            nn.Linear(distiller.student_hidden_dim, distiller.teacher_hidden_dim)
+            for _ in range(self.num_layers)
+        )
+```
+
+`src.training.entrypoint.attach_criterion` calls it once, after the `Distiller`
+exists and before the optimizer is built, and then registers the criterion on
+the distiller. That is what gets those weights onto the device, into DDP, into a
+parameter group at `--projector_lr`, and into the checkpoint
+(`kd_criterion.pth`). Anything created later than that gets none of it -- it
+stays on the CPU in fp32 and is never synchronised or trained.
+
+Such a method **must not** also pass `--projector_config_path`: a `t2s`
+projector registered and never used makes DDP abort with "expected to have
+finished reduction".
+
 Subclassing is optional. A criterion can still be a plain `nn.Module` with a
 `forward(self, distiller, input_data)` returning a dict containing `loss` — that
 is what the older methods in this directory do. The helpers in
@@ -142,8 +168,15 @@ rather than each criterion hard-coding one student's layout.
 ```bash
 python tools/misc/test_training_stack.py     # registry, base class, loop, images
 python tools/misc/test_teacher_cache.py      # cache format + registry consistency
+python tools/check_paper_settings.py         # the launchers you just wrote
 bash scripts/train/<yours>.sh --percent_data 0.01   # end-to-end smoke test
 ```
+
+A method with any real maths in it also gets its own
+`tools/misc/test_<method>.py`, running with no GPU and no model download -- see
+`test_cmtop.py` and `test_talas.py`. The properties worth pinning are the ones a
+wrong implementation still descends on: which layers a term reads, which
+direction a gradient flows, and what the loss is at its analytic zero.
 
 ## What you do *not* have to touch
 
@@ -152,3 +185,9 @@ everything in `src/training/` are method-independent. The loop hands
 `(criterion, batch)` to the `Distiller` and reads back a dict of scalars; it
 never learns a method's name. If you find yourself adding an `if kd_loss_type ==`
 to any of them, the thing being branched on probably belongs in `CriterionSpec`.
+
+The one thing that legitimately lives in the loop is an *optimizer* needing more
+than one forward/backward per step. `--sharpness_aware {sam,asam}`
+(`src/training/sam.py`) is TALAS's third component, but it wraps the optimizer
+rather than the loss, so it is a flag any method can set and the loop drives it
+without knowing which method is running.
