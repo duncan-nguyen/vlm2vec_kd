@@ -175,6 +175,7 @@ class DistillTrainer:
         self.grad_accum = max(1, int(training_args.gradient_accumulation_steps))
         self.logging_steps = max(1, int(training_args.logging_steps))
         self.max_grad_norm = getattr(training_args, "max_grad_norm", None)
+        self.global_step = 0
 
     # ------------------------------------------------------------- helpers
 
@@ -238,13 +239,14 @@ class DistillTrainer:
         self.optimizer.step()
         self.lr_scheduler.step()
         self.optimizer.zero_grad(set_to_none=True)
+        self.global_step += 1
 
     def _steps_per_epoch(self):
         return max(1, len(self.dataloader) // self.grad_accum)
 
     # --------------------------------------------------------------- epoch
 
-    def run_epoch(self, epoch):
+    def run_epoch(self, epoch, max_optimizer_steps=None):
         sampler = getattr(self.dataloader, "sampler", None)
         if hasattr(sampler, "set_epoch"):
             # Without this every epoch draws the same permutation.
@@ -260,8 +262,11 @@ class DistillTrainer:
         # this holds the one batch that is alive anyway.
         window_batches = []
 
+        epoch_steps = self._steps_per_epoch()
+        if max_optimizer_steps is not None:
+            epoch_steps = min(epoch_steps, max_optimizer_steps)
         progress_bar = tqdm(
-            total=self._steps_per_epoch(),
+            total=epoch_steps,
             desc=f"Epoch {epoch + 1}",
             disable=not is_main_process(),
         )
@@ -308,11 +313,18 @@ class DistillTrainer:
                         f"({profiling.profiler.n_steps} steps), stopping epoch early."
                     )
                     break
+                if max_optimizer_steps is not None and opt_step >= max_optimizer_steps:
+                    break
 
         # Gradients from a trailing partial accumulation window would otherwise
         # sit in .grad and be folded into the first step of the next epoch.
-        if micro_in_window:
+        if micro_in_window and (
+            max_optimizer_steps is None or opt_step < max_optimizer_steps
+        ):
             self._optimizer_step(window_batches)
+            opt_step += 1
+            if is_main_process():
+                progress_bar.update(1)
 
         progress_bar.close()
         if profiling.profiler.enabled and is_main_process():
@@ -328,10 +340,17 @@ class DistillTrainer:
     # ---------------------------------------------------------------- train
 
     def train(self):
-        num_epochs = int(self.training_args.num_train_epochs)
+        max_steps = int(getattr(self.training_args, "max_steps", -1) or -1)
+        if max_steps > 0:
+            num_epochs = (max_steps + self._steps_per_epoch() - 1) // self._steps_per_epoch()
+        else:
+            num_epochs = int(self.training_args.num_train_epochs)
         for epoch in range(num_epochs):
             print_master(f"Start epoch {epoch + 1}/{num_epochs}")
-            stats = self.run_epoch(epoch)
+            remaining_steps = max_steps - self.global_step if max_steps > 0 else None
+            if remaining_steps is not None and remaining_steps <= 0:
+                break
+            stats = self.run_epoch(epoch, max_optimizer_steps=remaining_steps)
             if is_main_process() and stats:
                 summary = " | ".join(f"{k}: {v:.4f}" for k, v in sorted(stats.items()))
                 print_master(f"Epoch {epoch + 1} done. {summary}")
@@ -346,6 +365,9 @@ class DistillTrainer:
                 )
             if dist.is_initialized():
                 dist.barrier()
+
+            if max_steps > 0 and self.global_step >= max_steps:
+                break
 
         save_checkpoint(
             self.module,

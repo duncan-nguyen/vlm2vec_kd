@@ -157,14 +157,32 @@ def load_processor(model_args, data_args=None):
 
         model_name_or_path = PeftConfig.from_pretrained(model_args.model_name).base_model_name_or_path if(model_args.init_lora_model) else model_name_or_path
         print(f">>>>>>>>>>>>>>>>>>>>>>>> Processor {model_name_or_path}")
-        image_processor = Qwen2VLImageProcessor.from_pretrained(model_name_or_path)
+        try:
+            image_processor = Qwen2VLImageProcessor.from_pretrained(model_name_or_path)
+        except ValueError as error:
+            # Older Qwen2-VL checkpoints store ``size`` as
+            # {min_pixels, max_pixels}. Transformers >= 4.56 validates the
+            # newer {shortest_edge, longest_edge} schema before applying the
+            # checkpoint's top-level min_pixels/max_pixels compatibility
+            # fields. Retry with the canonical defaults so those fields can
+            # be applied normally by the processor constructor.
+            if "size must contain 'shortest_edge' and 'longest_edge' keys" not in str(error):
+                raise
+            image_processor = Qwen2VLImageProcessor.from_pretrained(
+                model_name_or_path,
+                size={"shortest_edge": 56 * 56, "longest_edge": 28 * 28 * 1280},
+            )
         if data_args is not None:
             image_processor.min_pixels = data_args.resize_min_pixels
             image_processor.max_pixels = data_args.resize_max_pixels
         tokenizer = Qwen2TokenizerFast.from_pretrained(model_name_or_path)
-        processor = Qwen2VLProcessor.from_pretrained(
-            model_name_or_path,
-            image_processor=image_processor, tokenizer=tokenizer
+        # Both components are already loaded above. Constructing the repo's
+        # wrapper directly avoids ProcessorMixin.from_pretrained() loading the
+        # checkpoint's legacy image config a second time and discarding the
+        # compatibility-normalized image processor.
+        processor = Qwen2VLProcessor(
+            image_processor=image_processor,
+            tokenizer=tokenizer,
         )
         print("teacher processor loaded here.")
     elif model_args.model_backbone == QWEN2_VL_TOKENSELECTION:

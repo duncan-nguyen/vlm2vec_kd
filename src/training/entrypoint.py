@@ -4,6 +4,7 @@
 three lines each on top of :func:`run_training`.
 """
 
+import math
 import os
 
 import torch
@@ -150,6 +151,20 @@ def build_scheduler(optimizer, training_args, total_steps):
     )
 
 
+def training_horizon(training_args, steps_per_epoch):
+    """Return the epoch count and optimizer-step horizon for this run.
+
+    Hugging Face's ``--max_steps`` overrides ``--num_train_epochs``.  These
+    entrypoints use a small custom loop, so they must apply that contract
+    explicitly rather than relying on ``Trainer`` to do it for them.
+    """
+    max_steps = int(getattr(training_args, "max_steps", -1) or -1)
+    if max_steps > 0:
+        return math.ceil(max_steps / steps_per_epoch), max_steps
+    num_epochs = int(training_args.num_train_epochs)
+    return num_epochs, steps_per_epoch * num_epochs
+
+
 def run_training(autocast_dtype=None):
     """Parse arguments, build everything and train.
 
@@ -193,10 +208,11 @@ def run_training(autocast_dtype=None):
     steps_per_epoch = max(
         1, len(dataloader) // max(1, training_args.gradient_accumulation_steps)
     )
-    total_steps = steps_per_epoch * int(training_args.num_train_epochs)
+    num_epochs, total_steps = training_horizon(training_args, steps_per_epoch)
     print_master(
         f"world_size={world_size()}  batches/epoch={len(dataloader)}  "
-        f"optimizer steps/epoch={steps_per_epoch}  total={total_steps}"
+        f"optimizer steps/epoch={steps_per_epoch}  epochs={num_epochs}  "
+        f"total={total_steps}"
     )
     lr_scheduler = build_scheduler(optimizer, training_args, total_steps)
 

@@ -393,6 +393,59 @@ def grad_accumulation_checks():
     )
 
 
+def max_steps_checks():
+    """The custom loop must honour the standard HF ``--max_steps`` flag."""
+    from src.criterions.base import DistillCriterion
+    from src.training.entrypoint import training_horizon
+    from src.training.loop import DistillTrainer
+
+    class Simple(DistillCriterion):
+        def kd_loss(self, ctx):
+            return torch.nn.functional.mse_loss(ctx.student_qry, ctx.teacher_qry)
+
+    class TA:
+        gradient_accumulation_steps = 1
+        logging_steps = 1000
+        max_grad_norm = 0.0
+        max_steps = 2
+        num_train_epochs = 9
+        save_strategy = "no"
+        output_dir = ""
+
+    class Sched:
+        def __init__(self):
+            self.steps = 0
+
+        def step(self):
+            self.steps += 1
+
+        def get_last_lr(self):
+            return [0.0]
+
+    distiller = FakeDistiller()
+    scheduler = Sched()
+    trainer = DistillTrainer(
+        distiller=distiller,
+        criterion=Simple(Args()),
+        dataloader=[make_batch(seed=s) for s in range(5)],
+        optimizer=torch.optim.SGD(distiller.student.parameters(), lr=0.0),
+        lr_scheduler=scheduler,
+        model_args=None,
+        training_args=TA(),
+        device=torch.device("cpu"),
+    )
+    trainer.run_epoch(0, max_optimizer_steps=TA.max_steps)
+    check(
+        "max_steps stops after exactly that many optimizer updates",
+        trainer.global_step == TA.max_steps and scheduler.steps == TA.max_steps,
+        f"global_step={trainer.global_step}, scheduler_steps={scheduler.steps}",
+    )
+    check(
+        "max_steps overrides a longer epoch schedule",
+        training_horizon(TA(), steps_per_epoch=5) == (1, 2),
+    )
+
+
 def dataloader_checks():
     from src.training.dataloader import DEFAULT_NUM_WORKERS, build_train_dataloader
 
@@ -533,6 +586,7 @@ def main():
         ("images", image_checks),
         ("loss meter", loss_meter_checks),
         ("gradient accumulation", grad_accumulation_checks),
+        ("max steps", max_steps_checks),
         ("dataloader", dataloader_checks),
     ]:
         print(f"\n--- {name} ---")

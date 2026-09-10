@@ -230,7 +230,11 @@ def main():
             open(os.path.join(marker_dir, name), "w").close()
             print(f"  ✓ {name} extracted", flush=True)
 
-    if not args.keep_zips:
+    # Keep Hugging Face's `.incomplete` file after a failed transfer so the
+    # next invocation can resume its ranges. Removing the whole local_dir here
+    # made the downloader claim to be resumable while restarting a multi-GB
+    # archive from byte zero after every transient network error.
+    if not args.keep_zips and not failures:
         shutil.rmtree(zip_dir, ignore_errors=True)
 
     mins = (time.time() - t0) / 60
