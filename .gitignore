@@ -10,3 +10,11 @@ vlm
 # the default --output_dir; anchored so it does not also swallow src/training/
 /training/
 .DS_Store
+
+# Secrets. `.hf_token` holds the Hugging Face token the trainer picks up by
+# default (see src/hf_auth.py). It must never be committed: a token that reaches
+# the published history has to be revoked, as the one hard-coded in
+# tools/misc/push_to_hub.py did.
+.hf_token
+*.token
+.env

@@ -126,4 +126,7 @@ torchrun --standalone \
     "$@"
 # Anything after the script name is forwarded to the trainer and, because these
 # are argparse options, a repeat overrides what is set above. Handy for a smoke
-# test:  bash scripts/train/cmtop/llava_onevision_cls.sh --percent_data 0.01
+# test:  bash scripts/train/cmtop/llava_onevision_cls.sh --percent_data 0.01 \
+#            --push_to_hub False --eval_after_train False
+# Those last two matter: a finished run uploads itself and evaluates by
+# default, and a 1% run is not a result worth collecting.

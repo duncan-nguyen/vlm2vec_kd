@@ -11,8 +11,18 @@ launcher is run **from the repo root** and forwards anything after the script
 name to the trainer, so a smoke test is one flag away:
 
 ```bash
-bash scripts/train/rkd/fastvlm_cls.sh --percent_data 0.01
+bash scripts/train/rkd/fastvlm_cls.sh --percent_data 0.01 \
+    --push_to_hub False --eval_after_train False
 ```
+
+A run that reaches the end of training **evaluates itself and uploads the
+result**: `--eval_after_train` and `--push_to_hub` both default to true, so
+`checkpoint-final` is scored on the MMEB benchmarks and pushed into
+`nqdhocai/vlm2vec-kd-{ours,baselines}` under
+`<kd_loss_type>/<student>/<task>/<basename of --output_dir>`. Pass
+`--push_to_hub False --eval_after_train False` for anything that is not a result
+-- a smoke test, a debugging run, a 1% sweep. Details and the flag table:
+[../../README.md](../../README.md#evaluation).
 
 All of them are pinned to the paper's configuration and checked mechanically:
 

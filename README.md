@@ -13,6 +13,25 @@ pip install -r requirements.txt
 ```
 ## Download dataset
 
+### Hugging Face token
+
+Store it once; every training run, evaluation, download and `--push_to_hub`
+then finds it with no flag and no environment variable:
+
+```bash
+bash scripts/setup_hf_token.sh          # prompts, input hidden
+```
+
+That writes `.hf_token` at the repo root, mode 600, which `.gitignore`
+excludes. **Do not put a token in `src/arguments.py` or in a launcher instead**:
+this repo has already had to treat one token as compromised because
+`tools/misc/push_to_hub.py` carried it in source, and it is still in the
+published history. `$HF_TOKEN` overrides the file when it is set, so a one-off
+run can use a different token without touching anything. Resolution order and
+the reasoning: [src/hf_auth.py](src/hf_auth.py).
+
+### MMEB data
+
 `scripts/data/download_mmeb.py` fetches archives in parallel, extracts each one
 while the next is still downloading, resumes interrupted transfers, and skips
 subsets that are already extracted — so re-running it is free.
@@ -274,16 +293,21 @@ the table.
 
 ### At the end of training
 
-`--eval_after_train` makes the training command evaluate its own
-`checkpoint-final`, so there is no second command to remember and no chance of
-evaluating at the wrong resolution -- `--image_resolution`, `--model_backbone`,
-the LoRA rank, `--pooling` and `--normalize` are read off the run rather than
-retyped:
+**On by default.** A run that finishes evaluates its own `checkpoint-final`, so
+there is no second command to remember and no chance of evaluating at the wrong
+resolution -- `--image_resolution`, `--model_backbone`, the LoRA rank,
+`--pooling` and `--normalize` are read off the run rather than retyped:
 
 ```bash
-bash scripts/train/cmtop/fastvlm_vqa.sh --eval_after_train True
-bash scripts/train/cmtop/fastvlm_vqa.sh --eval_after_train True --eval_benchmarks vqa_ind vqa_ood
+bash scripts/train/cmtop/fastvlm_vqa.sh                                    # evaluates and uploads
+bash scripts/train/cmtop/fastvlm_vqa.sh --eval_benchmarks vqa_ind vqa_ood  # narrow it
+bash scripts/train/cmtop/fastvlm_vqa.sh --eval_after_train False           # skip it
 ```
+
+It needs the MMEB-eval images (`python scripts/data/download_mmeb.py --eval`,
+7.1 GB). Without them the evaluation fails loudly but the run still exits 0,
+because training finished and the checkpoint is saved -- `--eval_fail_hard True`
+for a sweep where a missing number is a failed run.
 
 On a multi-GPU run the subsets are sharded round-robin across the ranks, so the
 full 20-benchmark sweep costs roughly `20 / num_gpus` sequential evaluations.
@@ -292,28 +316,79 @@ the grouped table is printed at the end of the training log.
 
 | flag | default | meaning |
 | --- | --- | --- |
-| `--eval_after_train` | `False` | run the evaluation when training finishes |
+| `--eval_after_train` | `True` | run the evaluation when training finishes |
 | `--eval_benchmarks` | `all` | `cls_ind` `vqa_ind` `cls_ood` `vqa_ood`, the aliases `all` / `ind` / `ood` / `cls` / `vqa`, or bare MMEB subset names |
 | `--eval_image_dir` | `$MMEB_EVAL_DIR` or `./eval_images` | MMEB-eval images |
 | `--eval_checkpoint` | `<output_dir>/checkpoint-final` | what to evaluate |
 | `--eval_output_dir` | `<checkpoint>/mmeb_eval` | where scores and `summary.json` go |
-| `--eval_fail_hard` | `True` | exit non-zero if a subset fails; the checkpoint is saved either way |
+| `--eval_fail_hard` | `False` | exit non-zero if a subset fails; the checkpoint is saved either way |
 
 ### Pushing the result to the Hub
 
-`--push_to_hub --hub_model_id <repo>` uploads the evaluated checkpoint --
-weights, config, processor and the eval `summary.json` -- when the run finishes.
-These are Hugging Face's own `TrainingArguments` flags; until
+**On by default, to a private repo.** A finished run uploads its evaluated
+checkpoint -- weights, config, processor, the eval `summary.json` and a
+`vlm2vec_kd_run.json` describing the run. `--push_to_hub`, `--hub_token` and
+`--hub_private_repo` are Hugging Face's own `TrainingArguments` flags; until
 [src/training/hub.py](src/training/hub.py) they parsed and did nothing, because
-this repo uses its own loop rather than `Trainer`. The token comes from
-`--hub_token` or `$HF_TOKEN`. A failed upload is a warning, not a failed run --
-the weights are on local disk, and
-[tools/misc/push_to_hub.py](tools/misc/push_to_hub.py) re-pushes them.
+this repo uses its own loop rather than `Trainer`.
 
 ```bash
-bash scripts/train/cmtop/fastvlm_vqa.sh \
-    --eval_after_train True \
-    --push_to_hub True --hub_model_id my-org/cmtop-fastvlm-vqa --hub_private_repo True
+bash scripts/train/cmtop/fastvlm_vqa.sh                     # uploads when it finishes
+bash scripts/train/cmtop/fastvlm_vqa.sh --push_to_hub False  # keep it local
+```
+
+`--hub_private_repo` defaults to true here, against Hugging Face's own default:
+a repo is easy to make public later and impossible to un-publish. It only has an
+effect the first time a repo is created; after that the repo keeps whatever
+visibility it has.
+
+A smoke test still reaches the end of training, so it still uploads and
+evaluates unless told not to -- `--push_to_hub False --eval_after_train False` is
+part of the smoke-test line in every runbook for that reason.
+
+**Two repos, one directory per run.** The proposed methods and the baselines
+they are compared against are collected separately, and each run occupies
+`<kd_loss_type>/<student>/<task>/<basename of --output_dir>` inside its repo:
+
+```
+nqdhocai/vlm2vec-kd-ours/       cmtop/FastVLM-0.5B/vqa/cmtop_h0_seed42/
+                                cmtop/llava-onevision-qwen2-0.5b-ov-hf/cls/cmtop_h0_h1_seed43/
+nqdhocai/vlm2vec-kd-baselines/  talas/FastVLM-0.5B/cls/talas_seed42/
+                                span_propose_attn/FastVLM-0.5B/cls/hierd_fastvlm_cls/
+                                contrastive_rkd/FastVLM-0.5B/cls/RKD/
+```
+
+The directory is built from the run's own arguments, not from `--output_dir`
+alone, because the launchers disagree about what that looks like
+(`training/RKD`, `training/meta_emkd_grounding`, `training/hierd_fastvlm_cls`) --
+names that are unreadable side by side in a shared repo. `vlm2vec_kd_run.json`
+carries the KD settings, since the checkpoint's own `config.json` describes only
+the backbone and two directories differing by one `--kd_weight` would otherwise
+be indistinguishable.
+
+Which repo a run goes to follows `--kd_loss_type`: `cmtop` is this work's own,
+everything else is a published method being reproduced (TALAS and HieRD have
+their papers in [docs/baseline methods/](docs/baseline%20methods)). The set is
+`OURS_METHODS` in [src/training/hub.py](src/training/hub.py) -- a new proposal
+is one entry there, a new competitor needs no change.
+
+| flag | default | meaning |
+| --- | --- | --- |
+| `--push_to_hub` | `True` | upload when training finishes |
+| `--hub_owner` | `nqdhocai` | who owns the two collection repos |
+| `--hub_track` | `auto` | `ours` / `baseline` to override the `--kd_loss_type` decision |
+| `--hub_path_in_repo` | derived | directory inside the repo |
+| `--hub_model_id` | – | an explicit repo, bypassing `--hub_owner` / `--hub_track` |
+| `--hub_private_repo` | `True` | create the repo private (HF's own default is `False`) |
+| `--hub_upload_dir` | the evaluated checkpoint | what to upload |
+
+A failed upload is a warning, not a failed run -- the weights are on local disk,
+and [tools/misc/push_to_hub.py](tools/misc/push_to_hub.py) pushes them into the
+same layout afterwards:
+
+```bash
+python tools/misc/push_to_hub.py training/TALAS/fastvlm_cls/talas_seed42/checkpoint-final \
+    --track baseline --path-in-repo talas/FastVLM-0.5B/cls/talas_seed42
 ```
 
 ### Standalone

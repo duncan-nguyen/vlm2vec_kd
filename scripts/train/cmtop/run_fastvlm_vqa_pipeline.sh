@@ -26,8 +26,9 @@ SMOKE_OUTPUT="${SMOKE_OUTPUT:-training/CMTop/fastvlm_vqa/cmtop_h0_seed42_smoke}"
 # EVAL_AFTER_TRAIN=1 adds an MMEB evaluation to the end of the training run
 # itself -- the subsets are sharded across the same eight ranks, and the image
 # resolution and backbone come from the training arguments rather than from this
-# file. It is off by default only because it needs the 7.1 GB of MMEB-eval
-# images, which the DOWNLOAD phase below fetches when it is on.
+# file. It is off here, unlike the trainer's own default, only because it needs
+# the 7.1 GB of MMEB-eval images; the DOWNLOAD phase below fetches them when it
+# is on, and the TRAIN phase passes --eval_after_train False when it is not.
 EVAL_AFTER_TRAIN="${EVAL_AFTER_TRAIN:-0}"
 EVAL_BENCHMARKS="${EVAL_BENCHMARKS:-vqa_ind vqa_ood}"
 MMEB_EVAL_DIR="${MMEB_EVAL_DIR:-/mnt/models/vlm_2_vec_storage/eval_images}"
@@ -116,9 +117,10 @@ run_phase SMOKE "$SMOKE_LOG" env \
     --dataloader_num_workers "$NUM_WORKERS" \
     --save_strategy no \
     --report_to none \
-    --overwrite_output_dir True
+    --overwrite_output_dir True \
+    --push_to_hub False \
+    --eval_after_train False
 
-EVAL_FLAGS=()
 if [[ "$EVAL_AFTER_TRAIN" == "1" ]]; then
   read -r -a eval_groups <<<"$EVAL_BENCHMARKS"
   EVAL_FLAGS=(--eval_after_train True
@@ -127,6 +129,10 @@ if [[ "$EVAL_AFTER_TRAIN" == "1" ]]; then
   run_phase EVAL_DOWNLOAD logs/cmtop_vqa_eval_download.log \
     env -u HF_XET_HIGH_PERFORMANCE python -u scripts/data/download_mmeb.py \
       --eval --eval-out "$MMEB_EVAL_DIR"
+else
+  # Explicit, not empty: the trainer evaluates by default, and this pipeline
+  # only downloads the 7.1 GB of eval images in the branch above.
+  EVAL_FLAGS=(--eval_after_train False)
 fi
 
 run_phase TRAIN "$TRAIN_LOG" env \

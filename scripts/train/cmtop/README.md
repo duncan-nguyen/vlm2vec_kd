@@ -51,7 +51,8 @@ Then a real but tiny training run. Anything after the script name is forwarded
 to the trainer, and a repeated argparse option overrides the launcher's value:
 
 ```bash
-VARIANT=cmtop_h0 bash scripts/train/cmtop/fastvlm_cls.sh --percent_data 0.01
+VARIANT=cmtop_h0 bash scripts/train/cmtop/fastvlm_cls.sh --percent_data 0.01 \
+    --push_to_hub False --eval_after_train False
 ```
 
 Watch `kd_loss` in the progress bar: it must be non-zero and finite. If it sits

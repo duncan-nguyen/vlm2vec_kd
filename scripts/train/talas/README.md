@@ -25,7 +25,8 @@ Then a real but tiny run — anything after the script name is forwarded to the
 trainer:
 
 ```bash
-bash scripts/train/talas/fastvlm_cls.sh --percent_data 0.01
+bash scripts/train/talas/fastvlm_cls.sh --percent_data 0.01 \
+    --push_to_hub False --eval_after_train False
 ```
 
 ## 2. Build the teacher cache first

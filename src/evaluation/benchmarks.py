@@ -112,6 +112,31 @@ def resolve_groups(names):
     return ordered
 
 
+# The MMEB-*train* subsets each task trains on. Separate from the groups above
+# because the train and eval repos spell two of them differently -- `ImageNet_1K`
+# against `ImageNet-1K` -- so the eval names cannot be reused to recognise a
+# training run. Mirrors the presets in scripts/data/download_mmeb.py.
+TRAIN_TASKS = {
+    "cls": {"ImageNet_1K", "N24News", "HatefulMemes", "VOC2007", "SUN397"},
+    "vqa": {"OK-VQA", "A-OKVQA", "DocVQA", "InfographicsVQA", "ChartQA", "Visual7W"},
+}
+
+
+def infer_task(subsets):
+    """`"cls"`, `"vqa"`, `"mixed"` or None, from a run's `--subset_name`.
+
+    Used to name a checkpoint's directory on the Hub, so an unrecognised subset
+    list is not an error -- it just means the caller has to say what the task is.
+    """
+    if not subsets:
+        return None
+    present = set(subsets)
+    matched = [task for task, names in TRAIN_TASKS.items() if present & names]
+    if len(matched) == 1:
+        return matched[0]
+    return "mixed" if matched else None
+
+
 def groups_covering(subsets):
     """The (heading, columns) pairs that have at least one of `subsets` in them."""
     wanted = set(subsets)

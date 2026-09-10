@@ -17,6 +17,7 @@ from src.arguments import DataArguments, ModelArguments, TrainingArguments
 from src.criterions import build_criterion, get_spec
 from src.distiller import DistillationCollator, DistillationDataset, Distiller
 from src.evaluation.auto_eval import release_training_memory, run_post_training_eval
+from src.hf_auth import install_token_env, token_file_paths
 from src.training.dataloader import build_train_dataloader
 from src.training.hub import push_checkpoint
 from src.training.loop import DistillTrainer, is_main_process, world_size
@@ -40,9 +41,7 @@ def setup_distributed():
     if torch.cuda.is_available():
         torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
     if not dist.is_initialized():
-        dist.init_process_group(
-            backend="nccl" if torch.cuda.is_available() else "gloo"
-        )
+        dist.init_process_group(backend="nccl" if torch.cuda.is_available() else "gloo")
     return True
 
 
@@ -108,7 +107,9 @@ def build_optimizer(distiller, model_args, training_args):
     if criterion is not None:
         params = [p for p in criterion.parameters() if p.requires_grad]
         if params:
-            lr = getattr(model_args, "projector_lr", None) or training_args.learning_rate
+            lr = (
+                getattr(model_args, "projector_lr", None) or training_args.learning_rate
+            )
             optimizer.add_param_group({"params": params, "lr": lr})
             print_master(f"Criterion parameters added to optimizer at lr {lr}")
     return optimizer
@@ -180,6 +181,18 @@ def run_training(autocast_dtype=None):
     """
     model_args, data_args, training_args = parse_args()
     setup_distributed()
+
+    # Before the first dataset or weight download, and before the evaluation
+    # subprocess inherits this environment: one token file covers all of them.
+    if install_token_env():
+        print_master("Hugging Face token loaded.")
+    else:
+        print_master(
+            "No Hugging Face token found (checked $HF_TOKEN and "
+            f"{', '.join(token_file_paths())}); falling back to the "
+            "huggingface-cli login cache. Gated downloads and --push_to_hub "
+            "will fail without one."
+        )
 
     spec = get_spec(training_args.kd_loss_type)
     print_master(f"Method: {spec.name} -- {spec.summary}")
@@ -255,7 +268,7 @@ def run_training(autocast_dtype=None):
         failures = run_post_training_eval(model_args, data_args, training_args)
 
     if is_main_process():
-        push_checkpoint(training_args, checkpoint)
+        push_checkpoint(training_args, checkpoint, model_args, data_args)
 
     if dist.is_initialized():
         dist.barrier()

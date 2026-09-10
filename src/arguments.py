@@ -437,9 +437,9 @@ class TrainingArguments(TrainingArguments):
     # rank the run was trained with rather than whatever a separate eval command
     # happens to pass.
     eval_after_train: bool = field(
-        default=False,
+        default=True,
         metadata={
-            "help": "after training finishes, evaluate checkpoint-final on the MMEB benchmarks selected by --eval_benchmarks and write a summary table. On a multi-GPU run the subsets are sharded across the ranks"
+            "help": "after training finishes, evaluate checkpoint-final on the MMEB benchmarks selected by --eval_benchmarks and write a summary table. On a multi-GPU run the subsets are sharded across the ranks. --eval_after_train False for a run whose numbers are not wanted, e.g. a smoke test"
         },
     )
     eval_benchmarks: list[str] = field(
@@ -470,15 +470,51 @@ class TrainingArguments(TrainingArguments):
         },
     )
     eval_fail_hard: bool = field(
-        default=True,
+        default=False,
         metadata={
-            "help": "exit non-zero if any subset fails to evaluate. The checkpoint is already saved either way; False downgrades a failed eval to a warning"
+            "help": "exit non-zero if any subset fails to evaluate. Default False because the evaluation now runs on every run: a missing MMEB-eval image directory must not report a training run that finished and saved its checkpoint as a failed one. True for a sweep whose results are the point of the run"
         },
     )
     # `push_to_hub`, `hub_model_id`, `hub_token` and `hub_private_repo` are
     # inherited from Hugging Face's TrainingArguments. This loop is not
     # `Trainer`, so nothing acted on them until src/training/hub.py; they are
-    # honoured there rather than duplicated under new names.
+    # honoured there rather than duplicated under new names. The flags below are
+    # what that layout needs on top: which of the two repos a run belongs in,
+    # and where inside it.
+    # Both inherited from Hugging Face's TrainingArguments, redeclared only to
+    # change the default. Uploading is the normal end of a run here, and it
+    # goes to a private repo unless asked otherwise -- a repo is easy to make
+    # public later and impossible to un-publish.
+    push_to_hub: bool = field(
+        default=True,
+        metadata={
+            "help": "upload the finished checkpoint when training ends. --push_to_hub False for a run that should not be collected, e.g. a smoke test"
+        },
+    )
+    hub_private_repo: bool = field(
+        default=True,
+        metadata={
+            "help": "create the collection repo private. Only has an effect the first time a repo is created; an existing repo keeps its visibility"
+        },
+    )
+    hub_owner: str = field(
+        default="nqdhocai",
+        metadata={
+            "help": "Hugging Face user or organisation that owns the two collection repos. Ignored when --hub_model_id names a repo outright"
+        },
+    )
+    hub_track: str = field(
+        default="auto",
+        metadata={
+            "help": "which collection repo this run goes to: ours, baseline, or auto (default) to decide from --kd_loss_type via src/training/hub.py:OURS_METHODS"
+        },
+    )
+    hub_path_in_repo: str = field(
+        default=None,
+        metadata={
+            "help": "directory inside the repo; defaults to <kd_loss_type>/<student>/<task>/<basename of output_dir>, so every cell of the grid has its own and none collide"
+        },
+    )
     hub_upload_dir: str = field(
         default=None,
         metadata={
