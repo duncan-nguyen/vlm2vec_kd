@@ -86,13 +86,14 @@ scripts/
   data/          download_mmeb.py, precompute_teacher_embeddings.sh + encoding
   train/         <method>/<student>_<task>.sh, the full method x student x task
                  matrix + README.md
-  eval/          cls.sh / vqa.sh (Table 1 benchmarks)
+  eval/          cls.sh / vqa.sh / cls_ood.sh / vqa_ood.sh / all.sh (Table 1)
 tools/           python entrypoints
   train_distill_ddp.py         DDP trainer, no autocast (emkd/emo/hierd/pdtw/pproj)
   train_distill_no_deepspeed.py DDP trainer under bf16 autocast (cmtop/rkd/uld/talas)
   train_distillation.py        DeepSpeed variant; no launcher uses it
   train_vlm2vec.py             VLM2Vec baseline trainer (was train.py)
   eval_mmeb.py  eval_mmeb_simple.py  prepare_data.py  visualizer.py
+  summarize_mmeb.py            print the grouped Table 1 from score dirs
   eval_topology.py             teacher-vs-student topology + neighborhood metrics
   precompute_teacher_embeddings.py  build a frozen-teacher embedding cache
   eval_baselines/              CLIP / BLIP / SigLIP / OpenCLIP baselines
@@ -142,7 +143,7 @@ MMEB_EVAL_DIR=/data/eval_images  bash scripts/eval/cls.sh
 | variable | default | used by |
 | --- | --- | --- |
 | `MMEB_TRAIN_DIR` | `./vlm2vec_train/MMEB-train` | every `scripts/train/**` launcher, `prepare_encoded_data.sh` |
-| `MMEB_EVAL_DIR` | `./eval_images` | `scripts/eval/cls.sh`, `vqa.sh` |
+| `MMEB_EVAL_DIR` | `./eval_images` | every `scripts/eval/**` script, and `--eval_after_train` when `--eval_image_dir` is unset |
 
 `scripts/train/<method>/<student>_<task>.sh` — one launcher per
 `method × student × task` cell, for both students (`fastvlm`,
@@ -271,15 +272,82 @@ the table.
 
 ## Evaluation
 
+### At the end of training
+
+`--eval_after_train` makes the training command evaluate its own
+`checkpoint-final`, so there is no second command to remember and no chance of
+evaluating at the wrong resolution -- `--image_resolution`, `--model_backbone`,
+the LoRA rank, `--pooling` and `--normalize` are read off the run rather than
+retyped:
+
 ```bash
+bash scripts/train/cmtop/fastvlm_vqa.sh --eval_after_train True
+bash scripts/train/cmtop/fastvlm_vqa.sh --eval_after_train True --eval_benchmarks vqa_ind vqa_ood
+```
+
+On a multi-GPU run the subsets are sharded round-robin across the ranks, so the
+full 20-benchmark sweep costs roughly `20 / num_gpus` sequential evaluations.
+The per-subset scores and a `summary.json` land in `<checkpoint>/mmeb_eval`, and
+the grouped table is printed at the end of the training log.
+
+| flag | default | meaning |
+| --- | --- | --- |
+| `--eval_after_train` | `False` | run the evaluation when training finishes |
+| `--eval_benchmarks` | `all` | `cls_ind` `vqa_ind` `cls_ood` `vqa_ood`, the aliases `all` / `ind` / `ood` / `cls` / `vqa`, or bare MMEB subset names |
+| `--eval_image_dir` | `$MMEB_EVAL_DIR` or `./eval_images` | MMEB-eval images |
+| `--eval_checkpoint` | `<output_dir>/checkpoint-final` | what to evaluate |
+| `--eval_output_dir` | `<checkpoint>/mmeb_eval` | where scores and `summary.json` go |
+| `--eval_fail_hard` | `True` | exit non-zero if a subset fails; the checkpoint is saved either way |
+
+### Pushing the result to the Hub
+
+`--push_to_hub --hub_model_id <repo>` uploads the evaluated checkpoint --
+weights, config, processor and the eval `summary.json` -- when the run finishes.
+These are Hugging Face's own `TrainingArguments` flags; until
+[src/training/hub.py](src/training/hub.py) they parsed and did nothing, because
+this repo uses its own loop rather than `Trainer`. The token comes from
+`--hub_token` or `$HF_TOKEN`. A failed upload is a warning, not a failed run --
+the weights are on local disk, and
+[tools/misc/push_to_hub.py](tools/misc/push_to_hub.py) re-pushes them.
+
+```bash
+bash scripts/train/cmtop/fastvlm_vqa.sh \
+    --eval_after_train True \
+    --push_to_hub True --hub_model_id my-org/cmtop-fastvlm-vqa --hub_private_repo True
+```
+
+### Standalone
+
+```bash
+bash scripts/eval/all.sh training/hierd_fastvlm_cls/checkpoint-final
 bash scripts/eval/cls.sh training/hierd_fastvlm_cls/checkpoint-final
 CKPT=training/hierd_llava_onevision_vqa/checkpoint-final \
   BACKBONE=llava_onevision IMAGE_RESOLUTION=336 bash scripts/eval/vqa.sh
 ```
 
-`cls.sh` and `vqa.sh` cover the 5 and 6 Table 1 datasets respectively and report
-Precision@1. `IMAGE_RESOLUTION` must match the value the checkpoint was trained
-at, and `BACKBONE` must match its student.
+One script per column of Table 1, all reporting Precision@1; `all.sh` runs the
+four in sequence and prints the combined table. `IMAGE_RESOLUTION` must match the
+value the checkpoint was trained at, and `BACKBONE` must match its student --
+`--eval_after_train` exists because those two are easy to get wrong here.
+
+| script | benchmarks |
+| --- | --- |
+| `cls.sh` | CLS (IND): ImageNet-1K, N24News, HatefulMemes, VOC2007, SUN397 |
+| `vqa.sh` | VQA (IND): OK-VQA, A-OKVQA, DocVQA, InfographicsVQA, ChartQA, Visual7W |
+| `cls_ood.sh` | CLS (OOD): Place365, ImageNet-A, ImageNet-R, ObjectNet, Country211 |
+| `vqa_ood.sh` | VQA (OOD): ScienceQA, VizWiz, GQA, TextVQA |
+| `all.sh` | all twenty, then the combined table |
+
+The lists live in [src/evaluation/benchmarks.py](src/evaluation/benchmarks.py)
+and are read by the scripts and by `--eval_after_train` alike, so they cannot
+drift apart.
+
+`tools/summarize_mmeb.py` reprints the table from score directories written
+earlier, which is how to read a sweep that is still running:
+
+```bash
+python tools/summarize_mmeb.py CKPT/mmeb_cls CKPT/mmeb_vqa CKPT/mmeb_cls_ood CKPT/mmeb_vqa_ood
+```
 
 | variable | default |
 | --- | --- |

@@ -1,6 +1,12 @@
 #!/bin/bash
 # Run the FastVLM VQA CMTop pipeline on one 8-GPU node.
 #
+#   bash scripts/train/cmtop/run_fastvlm_vqa_pipeline.sh
+#   EVAL_AFTER_TRAIN=1 bash scripts/train/cmtop/run_fastvlm_vqa_pipeline.sh
+#
+# The second form downloads the MMEB-eval images and evaluates
+# checkpoint-final as the last step of the training run itself.
+#
 # The high nofile limit and conservative worker count prevent PyTorch's
 # multiprocessing queues from exhausting file descriptors during the teacher
 # cache pass. Override either value only after measuring the target host.
@@ -16,6 +22,15 @@ HF_TOKEN_FILE="${HF_TOKEN_FILE:-/home/tensara/.hf_token_r3}"
 TEACHER_CACHE="${TEACHER_CACHE:-cache/b3_qwen2_2b_fastvlm_vqa}"
 FULL_OUTPUT="${FULL_OUTPUT:-training/CMTop/fastvlm_vqa/cmtop_h0_seed42}"
 SMOKE_OUTPUT="${SMOKE_OUTPUT:-training/CMTop/fastvlm_vqa/cmtop_h0_seed42_smoke}"
+
+# EVAL_AFTER_TRAIN=1 adds an MMEB evaluation to the end of the training run
+# itself -- the subsets are sharded across the same eight ranks, and the image
+# resolution and backbone come from the training arguments rather than from this
+# file. It is off by default only because it needs the 7.1 GB of MMEB-eval
+# images, which the DOWNLOAD phase below fetches when it is on.
+EVAL_AFTER_TRAIN="${EVAL_AFTER_TRAIN:-0}"
+EVAL_BENCHMARKS="${EVAL_BENCHMARKS:-vqa_ind vqa_ood}"
+MMEB_EVAL_DIR="${MMEB_EVAL_DIR:-/mnt/models/vlm_2_vec_storage/eval_images}"
 
 cd "$PROJECT_DIR"
 source .venv/bin/activate
@@ -103,6 +118,17 @@ run_phase SMOKE "$SMOKE_LOG" env \
     --report_to none \
     --overwrite_output_dir True
 
+EVAL_FLAGS=()
+if [[ "$EVAL_AFTER_TRAIN" == "1" ]]; then
+  read -r -a eval_groups <<<"$EVAL_BENCHMARKS"
+  EVAL_FLAGS=(--eval_after_train True
+              --eval_benchmarks "${eval_groups[@]}"
+              --eval_image_dir "$MMEB_EVAL_DIR")
+  run_phase EVAL_DOWNLOAD logs/cmtop_vqa_eval_download.log \
+    env -u HF_XET_HIGH_PERFORMANCE python -u scripts/data/download_mmeb.py \
+      --eval --eval-out "$MMEB_EVAL_DIR"
+fi
+
 run_phase TRAIN "$TRAIN_LOG" env \
   NUM_GPUS_PER_NODE="$NUM_GPUS_PER_NODE" \
   NUM_WORKERS="$NUM_WORKERS" \
@@ -112,6 +138,10 @@ run_phase TRAIN "$TRAIN_LOG" env \
   OUTPUT_DIR="$FULL_OUTPUT" \
   bash scripts/train/cmtop/fastvlm_vqa.sh \
     --dataloader_num_workers "$NUM_WORKERS" \
-    --report_to none
+    --report_to none \
+    "${EVAL_FLAGS[@]+"${EVAL_FLAGS[@]}"}"
 
+if [[ "$EVAL_AFTER_TRAIN" == "1" ]]; then
+  stamp "EVAL_COMPLETE summary=${FULL_OUTPUT}/checkpoint-final/mmeb_eval/summary.json"
+fi
 stamp "PIPELINE_COMPLETE output=${FULL_OUTPUT}"

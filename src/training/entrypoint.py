@@ -6,6 +6,7 @@ three lines each on top of :func:`run_training`.
 
 import math
 import os
+import sys
 
 import torch
 import torch.distributed as dist
@@ -15,8 +16,10 @@ from transformers import HfArgumentParser
 from src.arguments import DataArguments, ModelArguments, TrainingArguments
 from src.criterions import build_criterion, get_spec
 from src.distiller import DistillationCollator, DistillationDataset, Distiller
+from src.evaluation.auto_eval import release_training_memory, run_post_training_eval
 from src.training.dataloader import build_train_dataloader
-from src.training.loop import DistillTrainer, world_size
+from src.training.hub import push_checkpoint
+from src.training.loop import DistillTrainer, is_main_process, world_size
 from src.training.sam import build_sharpness_aware
 from src.utils import print_master
 
@@ -224,7 +227,7 @@ def run_training(autocast_dtype=None):
             f"accumulation window twice."
         )
 
-    DistillTrainer(
+    trainer = DistillTrainer(
         distiller=distiller,
         criterion=criterion,
         dataloader=dataloader,
@@ -234,8 +237,36 @@ def run_training(autocast_dtype=None):
         training_args=training_args,
         autocast_dtype=autocast_dtype,
         sharpness_aware=sharpness_aware,
-    ).train()
-
+    )
+    trainer.train()
     print_master("Training completed successfully!")
+
+    checkpoint = training_args.eval_checkpoint or os.path.join(
+        training_args.output_dir, "checkpoint-final"
+    )
+    failures = []
+    if training_args.eval_after_train:
+        # The eval runs in a child process on this rank's GPU, so the training
+        # graph has to be gone *and* returned to the driver first, not merely
+        # unreferenced -- see release_training_memory.
+        del trainer, sharpness_aware, optimizer, lr_scheduler, dataloader
+        distiller = criterion = collator = train_dataset = None
+        release_training_memory()
+        failures = run_post_training_eval(model_args, data_args, training_args)
+
+    if is_main_process():
+        push_checkpoint(training_args, checkpoint)
+
     if dist.is_initialized():
+        dist.barrier()
         dist.destroy_process_group()
+
+    if failures and training_args.eval_fail_hard:
+        # Training itself finished and the checkpoint is on disk; a non-zero
+        # exit is here so a pipeline does not record a run with no numbers as a
+        # complete one. --eval_fail_hard False downgrades it to this message.
+        print_master(
+            f"Training finished and {checkpoint} is saved, but "
+            f"{len(failures)} evaluation subset(s) failed."
+        )
+        sys.exit(1)

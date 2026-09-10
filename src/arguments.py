@@ -431,6 +431,61 @@ class TrainingArguments(TrainingArguments):
         },
     )
 
+    # Evaluation at the end of training. Off by default; `--eval_after_train`
+    # turns `tools/eval_mmeb.py` into something the training command runs for
+    # itself, on `checkpoint-final`, with the image resolution / backbone / LoRA
+    # rank the run was trained with rather than whatever a separate eval command
+    # happens to pass.
+    eval_after_train: bool = field(
+        default=False,
+        metadata={
+            "help": "after training finishes, evaluate checkpoint-final on the MMEB benchmarks selected by --eval_benchmarks and write a summary table. On a multi-GPU run the subsets are sharded across the ranks"
+        },
+    )
+    eval_benchmarks: list[str] = field(
+        default_factory=lambda: ["all"],
+        metadata={
+            "help": "which benchmark groups --eval_after_train runs: cls_ind, vqa_ind, cls_ood, vqa_ood, the aliases all/ind/ood/cls/vqa, or bare MMEB-eval subset names. See src/evaluation/benchmarks.py"
+        },
+    )
+    eval_dataset_split: str = field(
+        default="test", metadata={"help": "split of --eval_dataset_name to evaluate on"}
+    )
+    eval_checkpoint: str = field(
+        default=None,
+        metadata={
+            "help": "checkpoint --eval_after_train evaluates; defaults to <output_dir>/checkpoint-final"
+        },
+    )
+    eval_output_dir: str = field(
+        default=None,
+        metadata={
+            "help": "where the per-subset scores and summary.json go; defaults to <checkpoint>/mmeb_eval"
+        },
+    )
+    eval_tgt_prefix_mod: bool = field(
+        default=True,
+        metadata={
+            "help": "pass --tgt_prefix_mod to the evaluation, as every script in scripts/eval/ does. Set False only to reproduce a run that did not use it"
+        },
+    )
+    eval_fail_hard: bool = field(
+        default=True,
+        metadata={
+            "help": "exit non-zero if any subset fails to evaluate. The checkpoint is already saved either way; False downgrades a failed eval to a warning"
+        },
+    )
+    # `push_to_hub`, `hub_model_id`, `hub_token` and `hub_private_repo` are
+    # inherited from Hugging Face's TrainingArguments. This loop is not
+    # `Trainer`, so nothing acted on them until src/training/hub.py; they are
+    # honoured there rather than duplicated under new names.
+    hub_upload_dir: str = field(
+        default=None,
+        metadata={
+            "help": "directory uploaded by --push_to_hub; defaults to the evaluated checkpoint (checkpoint-final), so the eval summary goes up with the weights"
+        },
+    )
+
 
 @dataclass
 class MTEBArguments:
