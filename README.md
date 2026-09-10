@@ -417,6 +417,24 @@ The lists live in [src/evaluation/benchmarks.py](src/evaluation/benchmarks.py)
 and are read by the scripts and by `--eval_after_train` alike, so they cannot
 drift apart.
 
+### Throughput
+
+The evaluation is input-bound before it is compute-bound: for each subset it
+opens, resizes and preprocesses every query image and every candidate image,
+and the forward it feeds is a single 0.5B encoder pass with no backward. The
+knobs, in the order they matter:
+
+| knob | where | note |
+| --- | --- | --- |
+| `NUM_WORKERS` / `--dataloader_num_workers` | scripts, trainer | decode and collate ahead of the encoder. Default 8 for the eval scripts; `--eval_after_train` forwards the training run's value, since each rank forks its own pool |
+| `BATCH_SIZE` / `--per_device_eval_batch_size` | scripts, trainer | 16 by default, and chosen for no particular reason -- a 0.5B student at 448px has headroom |
+| rank sharding | `--eval_after_train` | 20 subsets across N GPUs instead of one at a time |
+| `VLM2VEC_CLEAN_PYCACHE` | `tools/eval_mmeb.py` | off by default; setting it restores the old `os.walk` of the whole working directory at import |
+
+Scores already on disk are skipped, so a killed sweep resumes where it stopped,
+and the embedding dumps next to them let `tools/eval_topology.py` run without
+re-encoding.
+
 `tools/summarize_mmeb.py` reprints the table from score directories written
 earlier, which is how to read a sweep that is still running:
 

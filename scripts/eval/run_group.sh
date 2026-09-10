@@ -26,6 +26,13 @@ BACKBONE="${BACKBONE:-llava_qwen2}"
 IMAGE_RESOLUTION="${IMAGE_RESOLUTION:-448}"
 OUT="${OUT:-$CKPT/mmeb_$GROUP}"
 
+# Throughput knobs. NUM_WORKERS is the one that matters: it decides how much of
+# the JPEG decode and the processor pass runs ahead of the encoder instead of
+# in front of it. Raise BATCH_SIZE too if the GPU has headroom -- a 0.5B student
+# at 448px is small, and 16 was chosen for no particular reason.
+BATCH_SIZE="${BATCH_SIZE:-16}"
+NUM_WORKERS="${NUM_WORKERS:-8}"
+
 # Nơi chứa ảnh MMEB-eval. Ghi đè: MMEB_EVAL_DIR=/duong/dan/khac bash ...
 # Mặc định khớp với `python scripts/data/download_mmeb.py --eval`.
 MMEB_EVAL_DIR="${MMEB_EVAL_DIR:-./eval_images}"
@@ -50,7 +57,8 @@ python tools/eval_mmeb.py \
     --dataset_name TIGER-Lab/MMEB-eval \
     --subset_name "${SUBSETS[@]}" \
     --dataset_split test \
-    --per_device_eval_batch_size 16 \
+    --per_device_eval_batch_size "$BATCH_SIZE" \
+    --dataloader_num_workers "$NUM_WORKERS" \
     --image_dir "$MMEB_EVAL_DIR" \
     --image_resolution "$IMAGE_RESOLUTION" \
     --tgt_prefix_mod \

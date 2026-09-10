@@ -3,7 +3,6 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-import datasets
 import torch
 from datasets import concatenate_datasets, load_dataset
 from datasets.features.image import image_to_bytes
@@ -398,6 +397,7 @@ class EvalDataset(Dataset):
         text_field,
         img_path_field,
         mod_instruction=None,
+        eval_data=None,
     ):
         """
         (text_field, image_field) -> ("qry_text", "qry_img_path") or ("tgt_text", "tgt_img_path")
@@ -406,10 +406,18 @@ class EvalDataset(Dataset):
         self.model_args = model_args
         self.backbone = self.model_args.model_backbone
 
-        self.eval_data = load_dataset(
-            self.data_args.dataset_name,
-            subset,
-            split=self.data_args.dataset_split,
+        # `eval_data` lets the caller pass a split it has already loaded. The
+        # query dataset, the candidate dataset and the scoring loop all need the
+        # same one, and building it three times means three Python-level passes
+        # over every row.
+        self.eval_data = (
+            eval_data
+            if eval_data is not None
+            else load_dataset(
+                self.data_args.dataset_name,
+                subset,
+                split=self.data_args.dataset_split,
+            )
         )
         if (
             (subset == "WebQA" or subset == "EDIS")
@@ -420,51 +428,39 @@ class EvalDataset(Dataset):
                 lambda x: {"qry_text": x["qry_text"].replace("<|image_1|>", "").strip()}
             )
         self.paired_data = self.get_paired_data(text_field, img_path_field)
-        # self.paired_dataset = datasets.Dataset.from_dict({
-        #     "text": [pair["text"] for pair in self.paired_data],
-        #     "img_path": [pair["img_path"] for pair in self.paired_data]
-        # })
-        if (
+
+        use_mod = (
             ("tgt" in text_field)
             and (mod_instruction is not None)
             and self.data_args.tgt_prefix_mod
-        ):
-            print("Using TGT mod", mod_instruction, flush=True)
-            self.paired_dataset = datasets.Dataset.from_dict(
-                {
-                    "text": [
-                        mod_instruction + pair["text"] for pair in self.paired_data
-                    ],
-                    "img_path": [pair["img_path"] for pair in self.paired_data],
-                }
+        )
+        print(
+            f"{'Using' if use_mod else 'Not using'} TGT mod {mod_instruction}",
+            flush=True,
+        )
+        # Two plain lists, not a `datasets.Dataset.from_dict`. The pairs are
+        # already in memory as Python objects; round-tripping them through an
+        # Arrow table bought nothing and made `__getitem__` -- which runs once
+        # per sample, on the DataLoader's critical path -- do an Arrow row
+        # lookup and build a dict to read two strings back out of it.
+        prefix = mod_instruction if use_mod else ""
+        self.texts = [prefix + pair["text"] for pair in self.paired_data]
+        self.img_paths = [pair["img_path"] for pair in self.paired_data]
+        if self.backbone != PHI3V:
+            # Hoisted out of `__getitem__`: the token is fixed for the run, so
+            # this was len(dataset) string scans to produce the same result.
+            src_token, dst_token = (
+                VLM_IMAGE_TOKENS[PHI3V],
+                VLM_IMAGE_TOKENS[self.backbone],
             )
-            print(">>>>>>>>>>>>>inside tgt_mod_txt", flush=True)
-            # import ipdb; ipdb.set_trace()
-        else:
-            print("Not using TGT mod", mod_instruction, flush=True)
-            self.paired_dataset = datasets.Dataset.from_dict(
-                {
-                    "text": [pair["text"] for pair in self.paired_data],
-                    "img_path": [pair["img_path"] for pair in self.paired_data],
-                }
-            )
+            if src_token != dst_token:
+                self.texts = [text.replace(src_token, dst_token) for text in self.texts]
 
     def __len__(self):
-        return len(self.paired_dataset)
+        return len(self.texts)
 
     def __getitem__(self, item):
-        text, img_path = (
-            self.paired_dataset[item]["text"],
-            self.paired_dataset[item]["img_path"],
-        )
-        if self.backbone != PHI3V:
-            text = text.replace(
-                VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[self.backbone]
-            )
-        # if(self.backbone==INTERN_VL3):
-        #     full_img_path = os.path.join(self.data_args.image_dir, img_path)
-        #     return text, [full_img_path]
-        return text, self._get_image(img_path)
+        return self.texts[item], self._get_image(self.img_paths[item])
 
     def _process_image(self, image, resolution):
         if image is None:

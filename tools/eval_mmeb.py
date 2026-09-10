@@ -1,48 +1,63 @@
 # Run directly from the repo root, e.g. `torchrun tools/eval_mmeb.py`: put the repo root on
 # sys.path so `import src.…` resolves without installing the project.
-import os as _os
+import os
 import sys as _sys
 
-_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 import sys
+import time
 from collections import OrderedDict
 from contextlib import contextmanager
-import time
 
-from src.arguments import ModelArguments, DataArguments, TrainingArguments
-from transformers import HfArgumentParser, AutoConfig
+# The HF tokenizers' thread pool deadlocks after a fork and the DataLoader
+# workers are forks. Must be set before a fast tokenizer is imported.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-from src.model.model import MMEBModel
-from src.data.dataset.mmeb_dataset import EvalDataset
-from src.data.collator.eval_collator import EvalCollator
-from torch.utils.data import DataLoader
-import torch
-from tqdm import tqdm
-import numpy as np
 import pickle
-import os
+import shutil
+
+import numpy as np
+import torch
 from datasets import load_dataset
-from src.evaluation.eval_utils import get_pred
-from src.utils import print_rank
-from src.model.processor import get_backbone_name, load_processor, COLPALI
 from torch.nn.utils.rnn import pad_sequence
-import shutil 
+from tqdm import tqdm
+from transformers import AutoConfig, HfArgumentParser
+
+from src.arguments import DataArguments, ModelArguments, TrainingArguments
+from src.data.collator.eval_collator import EvalCollator
+from src.data.dataset.mmeb_dataset import EvalDataset
+from src.evaluation.eval_utils import batched_predict
+from src.model.model import MMEBModel
+from src.model.processor import COLPALI, get_backbone_name, load_processor
+from src.utils import print_rank
 
 
-def delete_pycache(root='.'):
+def delete_pycache(root="."):
+    """Recursively remove __pycache__ directories under `root`.
+
+    Off by default. This used to run unconditionally at import time, which
+    means: an `os.walk` of the entire working directory -- `.venv`, and
+    `eval_images/`, which is 7.1 GB across hundreds of thousands of files --
+    before a single model was loaded, followed by deleting the bytecode cache so
+    that torch and transformers recompile from source on the way in. With the
+    evaluation now running one process per subset, that was paid twenty times
+    over. Set VLM2VEC_CLEAN_PYCACHE=1 if a stale .pyc ever needs clearing.
+    """
     for dirpath, dirnames, filenames in os.walk(root):
         for dirname in dirnames:
-            if dirname == '__pycache__':
+            if dirname == "__pycache__":
                 full_path = os.path.join(dirpath, dirname)
                 print(f"Deleting: {full_path}")
                 try:
                     shutil.rmtree(full_path)
                 except:
                     print(">>>>>", "Module not exists", full_path, flush=True)
-                    pass
-delete_pycache()
+
+
+if os.environ.get("VLM2VEC_CLEAN_PYCACHE") == "1":
+    delete_pycache()
 
 
 POS_MOD_CLASS_LABEL = "Represent the class label: "
@@ -50,12 +65,29 @@ POS_MOD_IMAGE_CAPTION = "Represent the image caption: "
 POS_MOD_ANSWER = "Represent the answer: "
 
 POS_MOD_DICT = {
-                "ImageNet-1K": POS_MOD_CLASS_LABEL,"HatefulMemes":POS_MOD_CLASS_LABEL,"SUN397":POS_MOD_CLASS_LABEL,"N24News":POS_MOD_CLASS_LABEL,"VOC2007":POS_MOD_CLASS_LABEL, "Place365":POS_MOD_CLASS_LABEL,"ImageNet-A":POS_MOD_CLASS_LABEL,"ImageNet-R":POS_MOD_CLASS_LABEL,"ObjectNet":POS_MOD_CLASS_LABEL,"Country211":POS_MOD_CLASS_LABEL,
-                
-                "OK-VQA":POS_MOD_ANSWER, "A-OKVQA":POS_MOD_ANSWER, "DocVQA":POS_MOD_ANSWER, "InfographicsVQA":POS_MOD_ANSWER, "ChartQA":POS_MOD_ANSWER, "Visual7W":POS_MOD_ANSWER,"ScienceQA":POS_MOD_ANSWER, "GQA":POS_MOD_ANSWER, "TextVQA":POS_MOD_ANSWER, "VizWiz":POS_MOD_ANSWER,
-                
-                "MSCOCO_i2t":POS_MOD_IMAGE_CAPTION, "VisualNews_i2t":POS_MOD_IMAGE_CAPTION,
-                }
+    "ImageNet-1K": POS_MOD_CLASS_LABEL,
+    "HatefulMemes": POS_MOD_CLASS_LABEL,
+    "SUN397": POS_MOD_CLASS_LABEL,
+    "N24News": POS_MOD_CLASS_LABEL,
+    "VOC2007": POS_MOD_CLASS_LABEL,
+    "Place365": POS_MOD_CLASS_LABEL,
+    "ImageNet-A": POS_MOD_CLASS_LABEL,
+    "ImageNet-R": POS_MOD_CLASS_LABEL,
+    "ObjectNet": POS_MOD_CLASS_LABEL,
+    "Country211": POS_MOD_CLASS_LABEL,
+    "OK-VQA": POS_MOD_ANSWER,
+    "A-OKVQA": POS_MOD_ANSWER,
+    "DocVQA": POS_MOD_ANSWER,
+    "InfographicsVQA": POS_MOD_ANSWER,
+    "ChartQA": POS_MOD_ANSWER,
+    "Visual7W": POS_MOD_ANSWER,
+    "ScienceQA": POS_MOD_ANSWER,
+    "GQA": POS_MOD_ANSWER,
+    "TextVQA": POS_MOD_ANSWER,
+    "VizWiz": POS_MOD_ANSWER,
+    "MSCOCO_i2t": POS_MOD_IMAGE_CAPTION,
+    "VisualNews_i2t": POS_MOD_IMAGE_CAPTION,
+}
 
 
 def batch_to_device(batch, device):
@@ -66,6 +98,7 @@ def batch_to_device(batch, device):
         else:
             _batch[key] = value
     return _batch
+
 
 @contextmanager
 def time_block(name):
@@ -80,7 +113,7 @@ def main():
         if arg.startswith("--local-rank="):
             rank = arg.split("=")[1]
             sys.argv.remove(arg)
-            sys.argv.append('--local_rank')
+            sys.argv.append("--local_rank")
             sys.argv.append(rank)
     parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
@@ -89,12 +122,16 @@ def main():
     training_args: TrainingArguments
     os.makedirs(data_args.encode_output_path, exist_ok=True)
 
-    hf_config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
+    hf_config = AutoConfig.from_pretrained(
+        model_args.model_name, trust_remote_code=True
+    )
     if not hasattr(model_args, "model_backbone") or not model_args.model_backbone:
-        model_backbone = get_backbone_name(hf_config=hf_config, model_type=model_args.model_type)
-        setattr(model_args, 'model_backbone', model_backbone)
-        setattr(training_args, 'model_backbone', model_backbone)
-    print_rank(f'model_backbone: {model_args.model_backbone}')
+        model_backbone = get_backbone_name(
+            hf_config=hf_config, model_type=model_args.model_type
+        )
+        model_args.model_backbone = model_backbone
+        training_args.model_backbone = model_backbone
+    print_rank(f"model_backbone: {model_args.model_backbone}")
     processor = load_processor(model_args, data_args)
     model = MMEBModel.load(model_args, is_trainable=False)
     model.eval()
@@ -116,21 +153,30 @@ def main():
                 print(f"Found previous eval score, skipping {subset}")
                 print(score_dict)
                 continue
-            except Exception as e:
+            except Exception:
                 pass
 
-        print(f"\033[91m{idx+1}/{len(data_args.subset_name)}: Processing {subset} now!\033[0m")
+        print(
+            f"\033[91m{idx + 1}/{len(data_args.subset_name)}: Processing {subset} now!\033[0m"
+        )
         encode_qry_path = os.path.join(data_args.encode_output_path, f"{subset}_qry")
         encode_tgt_path = os.path.join(data_args.encode_output_path, f"{subset}_tgt")
         if os.path.exists(encode_qry_path) and os.path.exists(encode_tgt_path):
             continue
 
+        # Loaded once and shared by both sides. Each EvalDataset used to load
+        # the split itself, and `get_paired_data` walks every row in Python, so
+        # this was two full passes where one does.
+        subset_data = load_dataset(
+            data_args.dataset_name, subset, split=data_args.dataset_split
+        )
         eval_qry_dataset = EvalDataset(
             data_args=data_args,
             model_args=model_args,
             subset=subset,
             text_field="qry_text",
             img_path_field="qry_img_path",
+            eval_data=subset_data,
         )
         eval_tgt_dataset = EvalDataset(
             data_args=data_args,
@@ -138,24 +184,17 @@ def main():
             subset=subset,
             text_field="tgt_text",
             img_path_field="tgt_img_path",
-            mod_instruction=POS_MOD_DICT.get(subset, None) if data_args.tgt_prefix_mod else None
+            mod_instruction=POS_MOD_DICT.get(subset, None)
+            if data_args.tgt_prefix_mod
+            else None,
+            eval_data=subset_data,
         )
 
-        eval_qry_loader = DataLoader(
-            eval_qry_dataset,
-            batch_size=training_args.per_device_eval_batch_size,
-            collate_fn=eval_collator,
-            shuffle=False,
-            drop_last=False,
-            num_workers=0,
+        eval_qry_loader = build_eval_dataloader(
+            eval_qry_dataset, eval_collator, training_args, f"query - {subset}"
         )
-        eval_tgt_loader = DataLoader(
-            eval_tgt_dataset,
-            batch_size=training_args.per_device_eval_batch_size,
-            collate_fn=eval_collator,
-            shuffle=False,
-            drop_last=False,
-            num_workers=0,
+        eval_tgt_loader = build_eval_dataloader(
+            eval_tgt_dataset, eval_collator, training_args, f"target - {subset}"
         )
 
         encoded_tensor = []
@@ -163,28 +202,33 @@ def main():
             with torch.no_grad():
                 for batch in tqdm(eval_qry_loader, desc=f"Encode query - {subset}"):
                     batch = batch_to_device(batch, training_args.device)
-                    with torch.autocast(enabled=True, dtype=torch.bfloat16, device_type="cuda"):
+                    with torch.autocast(
+                        enabled=True, dtype=torch.bfloat16, device_type="cuda"
+                    ):
                         output = model(qry=batch)
                     encoded_tensor.append(output["qry_reps"].cpu().detach().float())
             encoded_tensor = np.concatenate(encoded_tensor)
-            with open(encode_qry_path, 'wb') as f:
+            with open(encode_qry_path, "wb") as f:
                 pickle.dump((encoded_tensor, eval_qry_dataset.paired_data), f)
-            
 
         encoded_tensor = []
         if not os.path.exists(encode_tgt_path):
             with torch.no_grad():
                 for batch in tqdm(eval_tgt_loader, desc=f"Encode target - {subset}"):
                     batch = batch_to_device(batch, training_args.device)
-                    with torch.autocast(enabled=True, dtype=torch.bfloat16, device_type="cuda"):
-                    # print(batch['pixel_values'].shape)
+                    with torch.autocast(
+                        enabled=True, dtype=torch.bfloat16, device_type="cuda"
+                    ):
+                        # print(batch['pixel_values'].shape)
                         output = model(tgt=batch)
                     encoded_tensor.append(output["tgt_reps"].cpu().detach().float())
             encoded_tensor = np.concatenate(encoded_tensor)
-            with open(encode_tgt_path, 'wb') as f:
+            with open(encode_tgt_path, "wb") as f:
                 pickle.dump((encoded_tensor, eval_tgt_dataset.paired_data), f)
 
-    for subset in tqdm(data_args.subset_name, desc="Iterate datasets to calculate scores"):
+    for subset in tqdm(
+        data_args.subset_name, desc="Iterate datasets to calculate scores"
+    ):
         print(f"\033[91m{subset}: Calculating score now!\033[0m")
         score_path = os.path.join(data_args.encode_output_path, f"{subset}_score.json")
         if os.path.exists(score_path):
@@ -194,25 +238,28 @@ def main():
                 print(f"Found previous eval score, skipping {subset}")
                 print(score_dict)
                 continue
-            except Exception as e:
+            except Exception:
                 pass
 
         encode_qry_path = os.path.join(data_args.encode_output_path, f"{subset}_qry")
         encode_tgt_path = os.path.join(data_args.encode_output_path, f"{subset}_tgt")
-        print(f"Loading cached query/target tensors")
-        with open(encode_qry_path, 'rb') as f:
+        print("Loading cached query/target tensors")
+        with open(encode_qry_path, "rb") as f:
             qry_tensor, qry_index = pickle.load(f)
-        with open(encode_tgt_path, 'rb') as f:
+        with open(encode_tgt_path, "rb") as f:
             tgt_tensor, tgt_index = pickle.load(f)
-        
 
-        print(f"Loading eval dataset")
+        print("Loading eval dataset")
         eval_data = load_dataset(
             data_args.dataset_name,
             subset,
             split=data_args.dataset_split,
         )
-        if (subset =="WebQA" or subset=="EDIS") and "qry_text" in eval_data.column_names and model_args.model_backbone=="llava_qwen2":
+        if (
+            (subset == "WebQA" or subset == "EDIS")
+            and "qry_text" in eval_data.column_names
+            and model_args.model_backbone == "llava_qwen2"
+        ):
             eval_data = eval_data.map(
                 lambda x: {"qry_text": x["qry_text"].replace("<|image_1|>", "").strip()}
             )
@@ -238,9 +285,13 @@ def main():
                 rowid_to_tgtkey[rowid] = key
 
             # Convert each [n_token, dim] numpy array to tensor
-            tgt_tensor = [torch.from_numpy(np.array(t)) for t in tgt_tensor]  # list of [n_token, dim] tensors
+            tgt_tensor = [
+                torch.from_numpy(np.array(t)) for t in tgt_tensor
+            ]  # list of [n_token, dim] tensors
             # Pad to max n_token (dim must be the same)
-            tgt_tensor = pad_sequence(tgt_tensor, batch_first=True)  # shape: [num_candidates, max_n_token, dim]
+            tgt_tensor = pad_sequence(
+                tgt_tensor, batch_first=True
+            )  # shape: [num_candidates, max_n_token, dim]
             tgt_tensor = tgt_tensor.to("cuda")
 
         # build a map for dedup
@@ -254,51 +305,50 @@ def main():
         # print(f'tgt_tensor.shape = {tgt_tensor.shape}')
         # print(f'len(tkey_to_rowid) = {len(tgtkey_to_rowid)}')
         # print(f'len(rowid_to_tkey) = {len(rowid_to_tgtkey)}')
-        print(f'len(tgt_key2emb) = {len(tgt_key2emb)}')
+        print(f"len(tgt_key2emb) = {len(tgt_key2emb)}")
 
-        n_correct = 0
-        all_pred = []
-        for row in tqdm(eval_data, desc=f"calculate score for {subset}"):
-            if model_args.model_backbone == COLPALI:
+        if model_args.model_backbone == COLPALI:
+            # ColPali scores late-interaction token matrices through the
+            # processor, so it cannot use the single matrix product below.
+            n_correct = 0
+            all_pred = []
+            for row in tqdm(eval_data, desc=f"calculate score for {subset}"):
                 qry_t = qry_key2emb[(row["qry_text"], row["qry_img_path"])]  # (dim,)
-                qry_t = torch.from_numpy(np.array([qry_t]))  # qry_t.shape=[1,len_q,dim], tgt_tensor.shape=[n_cand,len_cand,dim]
-                pos_tkey = (row['tgt_text'][0], row['tgt_img_path'][0])
-                print(pos_tkey in tgtkey_to_rowid)
-                print(pos_tkey in tgt_key2emb)
-                # with time_block("Scoring & prediction"):
+                qry_t = torch.from_numpy(
+                    np.array([qry_t])
+                )  # qry_t.shape=[1,len_q,dim], tgt_tensor.shape=[n_cand,len_cand,dim]
+                pos_tkey = (row["tgt_text"][0], row["tgt_img_path"][0])
                 scores = processor.score(qry_t, tgt_tensor, batch_size=1024)
                 pred_id = torch.argmax(scores, dim=1).cpu().numpy().tolist()[0]
                 pred_tkey = rowid_to_tgtkey[pred_id]
                 if pred_tkey == pos_tkey:
                     n_correct += 1
                 all_pred.append(pred_tkey)
-            else:
-                try:
-                    qry_t = qry_key2emb[(row["qry_text"], row["qry_img_path"])]  # (dim,)
-                    tgt_t, all_candidates = [], []
-                except:
-                    import ipdb; ipdb.set_trace()
-                # with time_block("Target vector & candidate prep"):
-                for tt in zip(row["tgt_text"], row["tgt_img_path"]):
-                    tgt_t.append(tgt_key2emb[tt])
-                    all_candidates.append(tt)
-                qry_t = torch.from_numpy(np.array(qry_t))
-                tgt_t = np.stack(tgt_t, axis=0)  # (num_candidate, dim)
-                scores, pred = get_pred(qry_t, tgt_t, normalization=model_args.normalize)
-                if pred == 0:
-                    n_correct += 1
-                all_pred.append(all_candidates[pred])
+        else:
+            n_correct, all_pred = batched_predict(
+                eval_data,
+                qry_key2emb,
+                tgt_key2emb,
+                normalization=model_args.normalize,
+                progress=lambda rows: tqdm(rows, desc=f"calculate score for {subset}"),
+            )
         score_path = os.path.join(data_args.encode_output_path, f"{subset}_score.json")
-        print(f"\033[91m{subset} accuracy: {n_correct/len(eval_data)}\033[0m")
-        score_dict = {"acc": n_correct/len(eval_data), "num_correct": n_correct, "num_pred": len(eval_data),
-                      "num_pred": len(all_pred), "num_data": len(eval_data)}
+        print(f"\033[91m{subset} accuracy: {n_correct / len(eval_data)}\033[0m")
+        score_dict = {
+            "acc": n_correct / len(eval_data),
+            "num_correct": n_correct,
+            "num_pred": len(eval_data),
+            "num_pred": len(all_pred),
+            "num_data": len(eval_data),
+        }
         print(score_dict)
         print(f"Outputting final score to: {score_path}")
         with open(score_path, "w") as f:
             json.dump(score_dict, f, indent=4)
-        with open(os.path.join(data_args.encode_output_path, f"{subset}_pred.txt"), "w") as f:
-            for item in all_pred:
-                f.write(f"{item}\n")
+        with open(
+            os.path.join(data_args.encode_output_path, f"{subset}_pred.txt"), "w"
+        ) as f:
+            f.writelines(f"{item}\n" for item in all_pred)
 
 
 if __name__ == "__main__":

@@ -109,6 +109,10 @@ def eval_command(checkpoint, subset, model_args, data_args, training_args, out_d
         "--dataset_split", training_args.eval_dataset_split,
         "--per_device_eval_batch_size", str(training_args.per_device_eval_batch_size),
         "--image_dir", image_dir,
+        # Forward the run's worker count rather than letting the child fall back
+        # to the eval default: on an 8-rank node each child forks its own pool,
+        # and the sensible total depends on the box, not on the subset.
+        "--dataloader_num_workers", str(training_args.dataloader_num_workers),
     ]
     if model_args.lora:
         cmd += [
