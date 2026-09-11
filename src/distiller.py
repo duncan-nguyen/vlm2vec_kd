@@ -1,3 +1,5 @@
+import bisect
+import hashlib
 import json
 import math
 import os
@@ -53,6 +55,29 @@ POS_MOD_DICT = {
     "MSCOCO_i2t": POS_MOD_IMAGE_CAPTION,
     "VisualNews_i2t": POS_MOD_IMAGE_CAPTION,
 }
+
+
+def stable_candidate_id(task_name, pos_text, pos_image_path):
+    """Deterministic int64 identity for a task-local retrieval candidate.
+
+    Python's built-in ``hash`` is salted per process, which would make DDP
+    ranks disagree about duplicates.  A short BLAKE2 digest is stable across
+    workers, ranks and restarts.  The task is part of the identity because the
+    same answer string can denote different candidates in different datasets.
+    """
+    payload = json.dumps(
+        [task_name, pos_text, pos_image_path],
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    value = int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "big")
+    # Convert uint64 to the range accepted by torch.long.  Reserve -1 for the
+    # collator's deliberately invalid placeholder id.
+    if value >= 1 << 63:
+        value -= 1 << 64
+    return -2 if value == -1 else value
 
 
 def process_image(image, resolution, max_dim=1344, keep_aspect=False):
@@ -374,13 +399,18 @@ class DistillationCollator:
     # the wrong sample. -1 is out of range for any cache, so it fails loudly.
     PLACEHOLDER_SAMPLE_ID = -1
 
-    def _get_sample_ids(self, batch):
-        """One dataset index per row `_get_batch_inputs` will emit.
+    def _get_row_ids(self, batch, field, required=False):
+        """One metadata id per row `_get_batch_inputs` will emit.
 
         Kept deliberately in lockstep with that method's placeholder handling:
         these ids are the key a teacher embedding cache is read by, so an
         off-by-one here would serve one sample's embedding for another.
         """
+        if not required and not any(
+            example and field in example for example in batch
+        ):
+            return None
+
         key = "student_query_text" if self.include_student else "teacher_query_text"
         ids = []
         for example in batch:
@@ -390,7 +420,7 @@ class DistillationCollator:
             texts = example[key]
             if not isinstance(texts, list):
                 texts = [texts]
-            row_ids = example.get("sample_ids", [])
+            row_ids = example.get(field, [])
             if not texts:
                 ids.append(self.PLACEHOLDER_SAMPLE_ID)
             elif len(row_ids) == len(texts):
@@ -398,6 +428,9 @@ class DistillationCollator:
             else:
                 ids.extend([self.PLACEHOLDER_SAMPLE_ID] * len(texts))
         return torch.tensor(ids, dtype=torch.long)
+
+    def _get_sample_ids(self, batch):
+        return self._get_row_ids(batch, "sample_ids", required=True)
 
     def _get_batch_inputs(self, batch, text_keyname, image_keyname):
         # print("Processing batch for keys:", text_keyname, image_keyname)
@@ -427,7 +460,11 @@ class DistillationCollator:
         return inputs
 
     def __call__(self, examples):
-        batch = {"sample_ids": self._get_sample_ids(examples)}
+        batch = {
+            "sample_ids": self._get_sample_ids(examples),
+            "task_ids": self._get_row_ids(examples, "task_ids"),
+            "candidate_ids": self._get_row_ids(examples, "candidate_ids"),
+        }
         bs = batch["sample_ids"].numel()
 
         if self.include_student:
@@ -447,6 +484,12 @@ class DistillationCollator:
                     f"{batch['sample_ids'].numel()} sample ids for {bs} student "
                     f"rows; _get_sample_ids and _get_batch_inputs disagree"
                 )
+            for field in ("task_ids", "candidate_ids"):
+                ids = batch[field]
+                if ids is not None and ids.numel() != bs:
+                    raise RuntimeError(
+                        f"{ids.numel()} {field} entries for {bs} student rows"
+                    )
 
         assert bs > 0, "An empty batch is detected!"
 
@@ -530,8 +573,11 @@ class DistillationDataset(Dataset):
         )
 
         train_data = []
+        self.task_index_ranges = []
+        self._task_names = []
+        offset = 0
 
-        for subset in data_args.subset_name:
+        for task_id, subset in enumerate(data_args.subset_name):
             subset_data = load_dataset(
                 self.data_args.dataset_name,
                 subset,
@@ -563,8 +609,13 @@ class DistillationDataset(Dataset):
             )
             subset_data = subset_data.rename_column("pos_text_instruction", "pos_text")
             train_data.append(subset_data)
+            end = offset + len(subset_data)
+            self.task_index_ranges.append((offset, end))
+            self._task_names.append(subset)
+            offset = end
 
         self.train_data = concatenate_datasets(train_data)
+        self._task_ends = [end for _, end in self.task_index_ranges]
         print_rank(
             f"Loaded {len(self.train_data)} samples from {self.data_args.dataset_name} with subsets {self.data_args.subset_name}"
         )
@@ -647,6 +698,11 @@ class DistillationDataset(Dataset):
             [],
             [],
         )
+        task_id = bisect.bisect_right(self._task_ends, data_idx)
+        if task_id >= len(self._task_names):
+            raise IndexError(f"dataset index {data_idx} is outside the task ranges")
+        task_name = self._task_names[task_id]
+        candidate_ids = []
 
         student_backbone = self.model_args.model_backbone
         teacher_backbone = self.model_args.teacher_backbone
@@ -707,6 +763,9 @@ class DistillationDataset(Dataset):
                 teacher_pos_texts.append(teacher_pos_text)
                 teacher_pos_images.append(teacher_pos_image)
 
+            candidate_ids.append(
+                stable_candidate_id(task_name, pos_text, pos_image_path)
+            )
             n_emitted += 1
 
         return {
@@ -714,6 +773,8 @@ class DistillationDataset(Dataset):
             # be keyed by it. Kept even when no cache is in use: it is 8 bytes a
             # row and it makes the batch self-describing.
             "sample_ids": [data_idx] * n_emitted,
+            "task_ids": [task_id] * n_emitted,
+            "candidate_ids": candidate_ids,
             "student_query_text": student_qry_texts,
             "student_query_image": student_qry_images,
             "student_pos_text": student_pos_texts,

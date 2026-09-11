@@ -57,7 +57,7 @@ def main():
     ap.add_argument(
         "--path-in-repo",
         default="",
-        help="directory inside the repo, e.g. cmtop/FastVLM-0.5B/vqa/cmtop_h0_seed42. "
+        help="directory inside the repo, e.g. cmtop/FastVLM-0.5B/vqa/cmmerge_seed42. "
         "The trainer's own layout is <kd_loss_type>/<student>/<task>/<run>",
     )
     ap.add_argument("--private", action="store_true", help="create the repo private")

@@ -1,4 +1,4 @@
-"""Self-checks for the CMTop persistence primitives in `src/topology.py`.
+"""Self-checks for CM-Merge and its persistence baselines.
 
 Run from the repo root: `python tools/misc/test_cmtop.py`. Needs only torch,
 numpy and scipy -- no model download, no GPU.
@@ -20,6 +20,8 @@ import numpy as np
 import torch
 
 from src.topology import (
+    bipartite_merge_matrix,
+    bipartite_merge_witnesses,
     bipartite_mst_edges,
     cosine_distance_matrix,
     h0_deaths,
@@ -79,6 +81,20 @@ def bipartite_edge_list(dist):
 def full_edge_list(dist):
     n = dist.shape[0]
     return [(float(dist[i, j]), i, j) for i in range(n) for j in range(i + 1, n)]
+
+
+def minimax_connectivity_reference(dist):
+    """Definition-level all-pairs minimax paths (Floyd-Warshall)."""
+    dist = np.asarray(dist, dtype=np.float64)
+    n_q, n_c = dist.shape
+    n = n_q + n_c
+    merge = np.full((n, n), np.inf, dtype=np.float64)
+    np.fill_diagonal(merge, 0.0)
+    merge[:n_q, n_q:] = dist
+    merge[n_q:, :n_q] = dist.T
+    for k in range(n):
+        merge = np.minimum(merge, np.maximum(merge[:, k, None], merge[k, None, :]))
+    return merge
 
 
 def brute_force_w2(a, b):
@@ -168,16 +184,19 @@ def _args(**overrides):
     from types import SimpleNamespace
 
     base = dict(
-        kd_weight=1.0,
+        kd_weight=0.0,
         cmtop_weight=1.0,
-        cmtop_mode="cross_modal",
+        cmtop_mode="merge",
         cmtop_h0_weight=1.0,
         cmtop_h1_weight=0.0,
         cmtop_h1_topk=0,
-        cmtop_endpoint_kd="cosine",
+        cmtop_endpoint_kd="none",
         cmtop_geometry_weight=0.0,
         cmtop_normalize_scale=False,
         cmtop_reduction="mean",
+        cmtop_merge_block="all",
+        cmtop_task_homogeneous=True,
+        cmtop_deduplicate_candidates=True,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -197,6 +216,8 @@ def criterion_checks():
     )
     distiller = _FakeDistiller(student, teacher, projectors)
     inputs = {
+        "task_ids": torch.zeros(batch, dtype=torch.long),
+        "candidate_ids": torch.arange(batch, dtype=torch.long),
         "student_inputs": {
             "qry": {"x": torch.randn(batch, in_dim)},
             "pos": {"x": torch.randn(batch, in_dim)},
@@ -207,7 +228,14 @@ def criterion_checks():
         },
     }
 
-    for mode in ("cross_modal", "point_cloud", "union", "cross_modal+point_cloud"):
+    for mode in (
+        "merge",
+        "critical_edges",
+        "cross_modal",
+        "point_cloud",
+        "union",
+        "merge+point_cloud",
+    ):
         h1 = 0.1 if "cross_modal" in mode else 0.0
         out = module.CrossModalTopologyLoss(_args(cmtop_mode=mode, cmtop_h1_weight=h1))(
             distiller, inputs
@@ -216,7 +244,7 @@ def criterion_checks():
         check(f"criterion runs and stays finite (mode={mode})", finite)
         check(
             f"H1 term is active exactly when asked for (mode={mode})",
-            (float(out["cmtop_h1_loss"]) > 0) == (h1 > 0),
+            (float(out["cmtop_h1_loss"].detach()) > 0) == (h1 > 0),
         )
 
     # H1 is only defined on the bipartite relation, so asking for it elsewhere
@@ -248,7 +276,14 @@ def criterion_checks():
     check(
         "endpoint KD without a projector reports the dimension mismatch",
         _raises(
-            lambda: module.CrossModalTopologyLoss(_args())(
+            lambda: module.CrossModalTopologyLoss(
+                _args(
+                    kd_weight=1.0,
+                    cmtop_weight=0.0,
+                    cmtop_endpoint_kd="cosine",
+                )
+            )(
+                # Endpoint KD, unlike CM-Merge, needs the dimensional projector.
                 _FakeDistiller(student, teacher, projectors=None), inputs
             ),
             ValueError,
@@ -256,7 +291,7 @@ def criterion_checks():
     )
 
     criterion = module.CrossModalTopologyLoss(
-        _args(cmtop_h1_weight=0.1, cmtop_geometry_weight=0.5)
+        _args(cmtop_mode="merge", cmtop_geometry_weight=0.5)
     )
     out = criterion(distiller, inputs)
     student.zero_grad()
@@ -280,29 +315,51 @@ def criterion_checks():
     check(
         "student-only flags leave the contrastive loss alone",
         torch.allclose(student_only["loss"], student_only["contrastive_loss"])
-        and float(student_only["kd_loss"]) == 0.0,
+        and float(student_only["kd_loss"].detach()) == 0.0,
     )
-    endpoint_only = module.CrossModalTopologyLoss(_args(cmtop_weight=0.0))(
-        distiller, inputs
-    )
+    endpoint_only = module.CrossModalTopologyLoss(
+        _args(kd_weight=1.0, cmtop_weight=0.0, cmtop_endpoint_kd="cosine")
+    )(distiller, inputs)
     check(
         "endpoint-KD flags switch the topology term off",
-        float(endpoint_only["cmtop_loss"]) == 0.0
-        and float(endpoint_only["endpoint_loss"]) > 0.0,
+        float(endpoint_only["cmtop_loss"].detach()) == 0.0
+        and float(endpoint_only["endpoint_loss"].detach()) > 0.0,
     )
 
     identical = {
+        "task_ids": inputs["task_ids"],
+        "candidate_ids": inputs["candidate_ids"],
         "student_inputs": inputs["teacher_inputs"],
         "teacher_inputs": inputs["teacher_inputs"],
     }
     same_model = _FakeDistiller(teacher, teacher, projectors)
     out = module.CrossModalTopologyLoss(
-        _args(kd_weight=0.0, cmtop_h1_weight=1.0, cmtop_endpoint_kd="none")
+        _args(kd_weight=0.0, cmtop_mode="merge", cmtop_endpoint_kd="none")
     )(same_model, identical)
     check(
         "distilling a model from itself gives zero topological loss",
-        float(out["cmtop_loss"]) == 0.0,
-        f"{float(out['cmtop_loss']):.2e}",
+        float(out["cmtop_loss"].detach()) == 0.0,
+        f"{float(out['cmtop_loss'].detach()):.2e}",
+    )
+
+    duplicate_inputs = dict(inputs)
+    duplicate_inputs["candidate_ids"] = torch.tensor(
+        [0, 0] + list(range(2, batch)), dtype=torch.long
+    )
+    duplicate_out = module.CrossModalTopologyLoss(_args())(distiller, duplicate_inputs)
+    check(
+        "candidate identity dedup keeps every query but one canonical candidate",
+        int(duplicate_out["num_unique_candidates"]) == batch - 1,
+    )
+
+    mixed_inputs = dict(inputs)
+    mixed_inputs["task_ids"] = torch.tensor([0] * (batch - 1) + [1])
+    check(
+        "a mixed-task relation graph is rejected",
+        _raises(
+            lambda: module.CrossModalTopologyLoss(_args())(distiller, mixed_inputs),
+            ValueError,
+        ),
     )
     print("--- /criterion ---\n")
 
@@ -344,6 +401,34 @@ def main():
     check(
         "bipartite MST touches every node",
         len(set(rows.tolist())) == n_q and len(set(cols.tolist())) == n_c,
+    )
+
+    merge = bipartite_merge_matrix(dist)
+    merge_reference = minimax_connectivity_reference(dist.numpy())
+    check(
+        "labelled merge matrix equals definition-level minimax paths",
+        np.allclose(merge.numpy(), merge_reference),
+        f"max diff {np.abs(merge.numpy() - merge_reference).max():.2e}",
+    )
+    witness_q, witness_c = bipartite_merge_witnesses(dist, (rows, cols))
+    off_diagonal = ~torch.eye(n_q + n_c, dtype=torch.bool)
+    check(
+        "every off-diagonal labelled pair has a valid MST witness",
+        bool((witness_q[off_diagonal] >= 0).all())
+        and bool((witness_c[off_diagonal] >= 0).all()),
+    )
+    check(
+        "merge matrix is symmetric with a zero diagonal",
+        torch.allclose(merge, merge.t())
+        and torch.count_nonzero(torch.diag(merge)) == 0,
+    )
+
+    perturbation = torch.empty_like(dist).uniform_(-1e-3, 1e-3)
+    perturbed_merge = bipartite_merge_matrix(dist + perturbation)
+    check(
+        "merge hierarchy obeys the L-infinity stability bound",
+        float((merge - perturbed_merge).abs().max())
+        <= float(perturbation.abs().max()) + 1e-7,
     )
 
     ref_deaths, ref_births = kruskal_sweep(n_q + n_c, bipartite_edge_list(dist))
@@ -404,6 +489,13 @@ def main():
             h0_deaths(dup_dist, (dup_rows, dup_cols)).numpy(), np.sort(dup_ref)
         ),
     )
+    check(
+        "labelled merge times stay exact with duplicate zero-distance rows",
+        np.allclose(
+            bipartite_merge_matrix(dup_dist).numpy(),
+            minimax_connectivity_reference(dup_dist.numpy()),
+        ),
+    )
 
     # ------------------------------------------------------- degenerate shapes
     # A short final batch must not crash the MST helpers.
@@ -412,6 +504,16 @@ def main():
         "1x1 relation gives a single H0 bar and no cycle",
         h0_deaths(single, bipartite_mst_edges(single)).numel() == 1
         and h1_births(single, bipartite_mst_edges(single)).numel() == 0,
+    )
+    check(
+        "1x1 relation has the expected labelled merge matrix",
+        torch.allclose(
+            bipartite_merge_matrix(single),
+            torch.tensor(
+                [[0.0, float(single[0, 0])], [float(single[0, 0]), 0.0]],
+                dtype=single.dtype,
+            ),
+        ),
     )
     lone = cosine_distance_matrix(q[:1], q[:1])
     check(
@@ -494,6 +596,20 @@ def main():
         f"{start:.3e} -> {float(loss.detach()):.3e}",
     )
 
+    merge_student = torch.randn(n_q, dim, requires_grad=True)
+    merge_target = bipartite_merge_matrix(dist.float()).detach()
+    merge_loss = (
+        bipartite_merge_matrix(cosine_distance_matrix(merge_student, c.float()))
+        - merge_target
+    ).abs().mean()
+    merge_loss.backward()
+    check(
+        "CM-Merge routes a finite non-zero gradient through witness edges",
+        merge_student.grad is not None
+        and torch.isfinite(merge_student.grad).all()
+        and merge_student.grad.abs().sum() > 0,
+    )
+
     criterion_checks()
 
     # -------------------------------------------------------------- invariance
@@ -506,6 +622,23 @@ def main():
             h0_deaths(permuted, bipartite_mst_edges(permuted)).numpy(),
             fast_deaths.numpy(),
         ),
+    )
+    vertex_perm = torch.cat([perm_q, n_q + perm_c])
+    check(
+        "labelled merge hierarchy is equivariant to simultaneous relabelling",
+        torch.allclose(
+            bipartite_merge_matrix(permuted),
+            merge[vertex_perm][:, vertex_perm],
+        ),
+    )
+    candidate_permuted = dist[:, perm_c]
+    candidate_permuted_h0 = h0_deaths(
+        candidate_permuted, bipartite_mst_edges(candidate_permuted)
+    )
+    check(
+        "candidate permutation exposes the barcode's identity blindness",
+        torch.allclose(candidate_permuted_h0, fast_deaths)
+        and not torch.allclose(bipartite_merge_matrix(candidate_permuted), merge),
     )
 
     print()

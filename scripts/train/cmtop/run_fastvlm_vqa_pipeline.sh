@@ -20,8 +20,8 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 HF_HOME="${HF_HOME:-/mnt/models/vlm_2_vec_storage/hf_cache}"
 HF_TOKEN_FILE="${HF_TOKEN_FILE:-/home/tensara/.hf_token_r3}"
 TEACHER_CACHE="${TEACHER_CACHE:-cache/b3_qwen2_2b_fastvlm_vqa}"
-FULL_OUTPUT="${FULL_OUTPUT:-training/CMTop/fastvlm_vqa/cmtop_h0_seed42}"
-SMOKE_OUTPUT="${SMOKE_OUTPUT:-training/CMTop/fastvlm_vqa/cmtop_h0_seed42_smoke}"
+FULL_OUTPUT="${FULL_OUTPUT:-training/CMTop/fastvlm_vqa/cmmerge_seed42}"
+SMOKE_OUTPUT="${SMOKE_OUTPUT:-training/CMTop/fastvlm_vqa/cmmerge_seed42_smoke}"
 
 # EVAL_AFTER_TRAIN=1 adds an MMEB evaluation to the end of the training run
 # itself -- the subsets are sharded across the same eight ranks, and the image
@@ -109,7 +109,7 @@ run_phase SMOKE "$SMOKE_LOG" env \
   NUM_GPUS_PER_NODE="$NUM_GPUS_PER_NODE" \
   NUM_WORKERS="$NUM_WORKERS" \
   TEACHER_CACHE="$TEACHER_CACHE" \
-  VARIANT=cmtop_h0 \
+  VARIANT=cmmerge \
   SEED=42 \
   OUTPUT_DIR="$SMOKE_OUTPUT" \
   bash scripts/train/cmtop/fastvlm_vqa.sh \
@@ -139,7 +139,7 @@ run_phase TRAIN "$TRAIN_LOG" env \
   NUM_GPUS_PER_NODE="$NUM_GPUS_PER_NODE" \
   NUM_WORKERS="$NUM_WORKERS" \
   TEACHER_CACHE="$TEACHER_CACHE" \
-  VARIANT=cmtop_h0 \
+  VARIANT=cmmerge \
   SEED=42 \
   OUTPUT_DIR="$FULL_OUTPUT" \
   bash scripts/train/cmtop/fastvlm_vqa.sh \

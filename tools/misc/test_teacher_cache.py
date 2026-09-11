@@ -330,6 +330,8 @@ def collator_checks():
     def row(idx, n=1):
         return {
             "sample_ids": [idx] * n,
+            "task_ids": [2] * n,
+            "candidate_ids": [100 + idx] * n,
             "student_query_text": ["q"] * n,
             "student_query_image": [None] * n,
             "student_pos_text": ["p"] * n,
@@ -357,6 +359,11 @@ def collator_checks():
         "collator emits one sample id per row, in order",
         batch["sample_ids"].tolist() == [3, 7, 11],
         str(batch["sample_ids"].tolist()),
+    )
+    check(
+        "collator keeps task and candidate identities in the same row order",
+        batch["task_ids"].tolist() == [2, 2, 2]
+        and batch["candidate_ids"].tolist() == [103, 107, 111],
     )
     check(
         "both sides are processed by default",
@@ -400,6 +407,8 @@ def collator_checks():
     check(
         "a row with no usable pairs keeps the ids aligned with the rows",
         batch["sample_ids"].tolist() == [3, placeholder, 5]
+        and batch["task_ids"].tolist() == [2, placeholder, 2]
+        and batch["candidate_ids"].tolist() == [103, placeholder, 105]
         and len(batch["student_inputs"]["qry"]["text"]) == 3,
         str(batch["sample_ids"].tolist()),
     )
@@ -460,12 +469,13 @@ def criterion_against_cache(cache, qry, pos, dim):
 
     batch, in_dim, student_dim = 12, 24, 8
     student = _Student(in_dim, student_dim)
-    projectors = torch.nn.ModuleDict({"t2s": torch.nn.Linear(dim, student_dim)})
-    distiller = _CachedDistiller(student, cache, projectors)
+    distiller = _CachedDistiller(student, cache, projectors=None)
 
     ids = torch.arange(batch)
     inputs = {
         "sample_ids": ids,
+        "task_ids": torch.zeros(batch, dtype=torch.long),
+        "candidate_ids": torch.arange(batch, dtype=torch.long),
         "student_inputs": {
             "qry": {"x": torch.randn(batch, in_dim)},
             "pos": {"x": torch.randn(batch, in_dim)},
@@ -474,14 +484,14 @@ def criterion_against_cache(cache, qry, pos, dim):
         # the criterion must not reach for one.
     }
     args = SimpleNamespace(
-        kd_weight=1.0,
+        kd_weight=0.0,
         cmtop_weight=1.0,
-        cmtop_mode="cross_modal",
+        cmtop_mode="merge",
         cmtop_h0_weight=1.0,
-        cmtop_h1_weight=0.1,
+        cmtop_h1_weight=0.0,
         cmtop_h1_topk=0,
-        cmtop_endpoint_kd="cosine",
-        cmtop_geometry_weight=0.5,
+        cmtop_endpoint_kd="none",
+        cmtop_geometry_weight=0.0,
         cmtop_normalize_scale=False,
         cmtop_reduction="mean",
     )

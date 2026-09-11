@@ -144,7 +144,7 @@ No GPU, no model download, a few seconds each:
 
 ```bash
 python tools/misc/test_training_stack.py   # registry, criterion base, loop, images
-python tools/misc/test_cmtop.py            # persistence primitives + the CMTop criterion
+python tools/misc/test_cmtop.py            # merge hierarchy + persistence controls
 python tools/misc/test_talas.py            # TALAS's two losses, ASAM, the two-pass step
 python tools/misc/test_teacher_cache.py    # cache format and what it refuses
 ```
@@ -173,7 +173,7 @@ root**:
 scripts/train/                   README.md  the matrix + compatibility notes
   rkd/           contrastive_rkd
   uld/           universal_logit
-  cmtop/         cmtop                      + README.md, the 6-variant ablation
+  cmtop/         cmtop                      + README.md, the CM-Merge ablation
   talas/         talas                      + README.md, the 5-variant ablation
   emkd/          em_kd | em_kd_llava_ov     one criterion per student
   emo/           emo_loss
@@ -213,12 +213,12 @@ evaluation code paths (`low` is 448 in `src/distiller.py` and 128 in
 `src/data/dataset/mmeb_dataset.py`), so a preset silently changes preprocessing
 between the two.
 
-### Cross-modal topological distillation (CMTop)
+### Label-aware cross-modal merge distillation (CM-Merge)
 
-`--kd_loss_type cmtop` distils the persistent topology of the query-candidate
-retrieval *relation* rather than the geometry of the two point clouds. It is a
-research line on top of the paper's table, not one of its cells; the launcher
-still pins every shared hyperparameter to Table 6 so the ablation is clean.
+`--kd_loss_type cmtop` now distils the labelled merge hierarchy of the
+query-candidate filtration. Unlike a sorted H0 barcode, it retains which
+query/candidate pairs merge at each threshold and therefore detects a candidate
+permutation that destroys retrieval while preserving the barcode.
 
 ```bash
 # optional but recommended: encode the frozen teacher once, then every variant
@@ -226,7 +226,7 @@ still pins every shared hyperparameter to Table 6 so the ablation is clean.
 TASK=cls STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls \
   bash scripts/data/precompute_teacher_embeddings.sh
 
-TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls VARIANT=cmtop_h0 SEED=42 \
+TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls VARIANT=cmmerge SEED=42 \
   bash scripts/train/cmtop/fastvlm_cls.sh
 python tools/misc/test_cmtop.py          # self-checks, no GPU or model download
 python tools/misc/test_teacher_cache.py
@@ -238,8 +238,9 @@ embedding. Criteria that need its hidden states are refused rather than served
 wrong data.
 
 `VARIANT` selects one row of the ablation (`student_only`, `endpoint`, `vsp`,
-`pointcloud_h0`, `cmtop_h0`, `cmtop_h0_h1`). Full runbook — environment, data,
-smoke test, the ablation loop and evaluation:
+`pointcloud_h0`, `barcode_h0`, `critical_edges`, `cmmerge`). The main method
+uses only retrieval loss plus one CM-Merge term; task-homogeneous batching and
+canonical candidate deduplication are enabled by default. Full runbook:
 [scripts/train/cmtop/README.md](scripts/train/cmtop/README.md). Design and flag
 reference: [docs/cmtop_implementation.md](docs/cmtop_implementation.md); the
 research brief it implements:
@@ -351,8 +352,8 @@ they are compared against are collected separately, and each run occupies
 `<kd_loss_type>/<student>/<task>/<basename of --output_dir>` inside its repo:
 
 ```
-nqdhocai/vlm2vec-kd-ours/       cmtop/FastVLM-0.5B/vqa/cmtop_h0_seed42/
-                                cmtop/llava-onevision-qwen2-0.5b-ov-hf/cls/cmtop_h0_h1_seed43/
+nqdhocai/vlm2vec-kd-ours/       cmtop/FastVLM-0.5B/vqa/cmmerge_seed42/
+                                cmtop/llava-onevision-qwen2-0.5b-ov-hf/cls/cmmerge_seed43/
 nqdhocai/vlm2vec-kd-baselines/  talas/FastVLM-0.5B/cls/talas_seed42/
                                 span_propose_attn/FastVLM-0.5B/cls/hierd_fastvlm_cls/
                                 contrastive_rkd/FastVLM-0.5B/cls/RKD/

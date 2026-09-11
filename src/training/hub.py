@@ -16,7 +16,7 @@ Layout
 Two repos, not one per run: the proposed methods in one, the baselines they are
 compared against in the other, each run its own directory inside::
 
-    nqdhocai/vlm2vec-kd-ours/       cmtop/FastVLM-0.5B/vqa/cmtop_h0_seed42/
+    nqdhocai/vlm2vec-kd-ours/       cmtop/FastVLM-0.5B/vqa/cmmerge_seed42/
     nqdhocai/vlm2vec-kd-baselines/  talas/FastVLM-0.5B/cls/talas_seed42/
                                     span_propose_attn/FastVLM-0.5B/cls/hierd_fastvlm_cls/
 

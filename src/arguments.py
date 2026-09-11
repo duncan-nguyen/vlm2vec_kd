@@ -317,26 +317,27 @@ class TrainingArguments(TrainingArguments):
             "help": "min_samples for DBSCAN when clustering teacher features for span loss"
         },
     )
-    # new args for cross-modal topological distillation (kd_loss_type="cmtop")
+    # CM-Merge and its structural ablations (kd_loss_type="cmtop")
     cmtop_weight: float = field(
         default=1.0,
         metadata={
-            "help": "lambda_CMTop: weight of the topological term. 0 disables it, which turns the criterion into the endpoint-KD baseline"
+            "help": "lambda_merge: weight of CM-Merge (or of the selected topological ablation). 0 disables topology"
         },
     )
     cmtop_mode: str = field(
-        default="cross_modal",
+        default="merge",
         metadata={
-            "help": "which filtration(s) to distil, '+'-joined: cross_modal (the bipartite retrieval relation, the main proposal), point_cloud (each modality's own cloud, the ablation control), union (both modalities as one cloud)"
+            "help": "structural target, '+'-joined: merge (labelled bipartite merge hierarchy; main), critical_edges, cross_modal (legacy barcode H0/H1), point_cloud, or union"
         },
     )
     cmtop_h0_weight: float = field(
-        default=1.0, metadata={"help": "weight of the H0 term inside L_CMTop"}
+        default=1.0,
+        metadata={"help": "legacy barcode baseline: weight of its H0 term"},
     )
     cmtop_h1_weight: float = field(
         default=0.0,
         metadata={
-            "help": "lambda_1: weight of the lightweight H1-birth term. 0 (default) is the main proposal, H0 only"
+            "help": "legacy cross_modal barcode baseline: weight of its H1-birth term"
         },
     )
     cmtop_h1_topk: int = field(
@@ -344,9 +345,9 @@ class TrainingArguments(TrainingArguments):
         metadata={"help": "how many earliest H1 births to compare; 0 means |Q|+|C|"},
     )
     cmtop_endpoint_kd: str = field(
-        default="cosine",
+        default="none",
         metadata={
-            "help": "endpoint KD on the final embeddings: cosine, mse or none. Scaled by --kd_weight"
+            "help": "optional endpoint ablation: cosine, mse or none. The CM-Merge main method uses none; scaled by --kd_weight"
         },
     )
     cmtop_geometry_weight: float = field(
@@ -364,7 +365,25 @@ class TrainingArguments(TrainingArguments):
     cmtop_reduction: str = field(
         default="mean",
         metadata={
-            "help": "mean (per-bar, batch-size independent) or sum (textbook W_2^2) over the matched bars"
+            "help": "mean (batch-size independent) or sum over labelled vertex pairs / legacy bars"
+        },
+    )
+    cmtop_merge_block: str = field(
+        default="all",
+        metadata={
+            "help": "CM-Merge pair block: all labelled vertex pairs (main) or cross for query-candidate pairs only"
+        },
+    )
+    cmtop_task_homogeneous: bool = field(
+        default=True,
+        metadata={
+            "help": "form each global CMTop batch from one task and validate the gathered graph"
+        },
+    )
+    cmtop_deduplicate_candidates: bool = field(
+        default=True,
+        metadata={
+            "help": "collapse repeated candidate identities before constructing the cross-modal relation"
         },
     )
     # new args for TALAS (kd_loss_type="talas"); see docs/talas_implementation.md

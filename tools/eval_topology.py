@@ -12,11 +12,10 @@ writes to `--encode_output_path`, so no re-encoding is needed:
         --subsets ImageNet-1K N24News \
         --output runs/student/topology_report.json
 
-The dumps hold a de-duplicated pool keyed by (text, image path); the eval
-dataset says which candidate is the positive for each query, which is what pairs
-row i of the query side with row i of the candidate side. That pairing is the
-whole point -- the relation graph is only comparable across two models if its
-nodes carry the same labels on both sides.
+The dumps hold pools keyed by (text, image path). Queries and candidates are
+aligned by those keys across teacher and student, while repeated candidates are
+kept once. Their pool sizes need not match: classification is naturally a
+many-query-to-few-label relation.
 
 Aligned `.npy` files can be passed directly instead, for embeddings produced
 outside the MMEB pipeline:
@@ -66,14 +65,7 @@ def load_mmeb_dump(embeddings_dir, subset):
 
 
 def align_pairs(eval_data, teacher_maps, student_maps):
-    """Build four row-aligned matrices: (teacher_q, teacher_c, student_q, student_c).
-
-    One row per eval example whose query and positive candidate are present in
-    both dumps. Rows repeating a query or a positive already seen are dropped:
-    a classification subset points thousands of queries at the same label
-    embedding, and duplicated nodes sit at distance 0 from each other, which
-    makes the H0 barcode say more about the duplication than about the model.
-    """
+    """Build teacher/student-aligned query and canonical candidate pools."""
     (teacher_qry_map, teacher_tgt_map) = teacher_maps
     (student_qry_map, student_tgt_map) = student_maps
 
@@ -82,28 +74,44 @@ def align_pairs(eval_data, teacher_maps, student_maps):
     skipped = 0
     for row in eval_data:
         qry_key = (row["qry_text"], row["qry_img_path"])
-        tgt_key = (row["tgt_text"][0], row["tgt_img_path"][0])
-        if qry_key in seen_qry or tgt_key in seen_tgt:
-            continue
-        try:
-            rows["teacher_q"].append(teacher_qry_map[qry_key])
-            rows["teacher_c"].append(teacher_tgt_map[tgt_key])
-            rows["student_q"].append(student_qry_map[qry_key])
-            rows["student_c"].append(student_tgt_map[tgt_key])
-        except KeyError:
-            skipped += 1
-            continue
-        seen_qry.add(qry_key)
-        seen_tgt.add(tgt_key)
+        if qry_key not in seen_qry:
+            if qry_key in teacher_qry_map and qry_key in student_qry_map:
+                rows["teacher_q"].append(teacher_qry_map[qry_key])
+                rows["student_q"].append(student_qry_map[qry_key])
+                seen_qry.add(qry_key)
+            else:
+                skipped += 1
 
-    if not rows["teacher_q"]:
-        raise ValueError("no example was present in all four embedding dumps")
+        target_texts = row["tgt_text"]
+        target_images = row["tgt_img_path"]
+        if not isinstance(target_texts, list):
+            target_texts = [target_texts]
+        if not isinstance(target_images, list):
+            target_images = [target_images]
+        if len(target_texts) != len(target_images):
+            raise ValueError(
+                "tgt_text and tgt_img_path must contain the same number of targets"
+            )
+        for target_text, target_image in zip(target_texts, target_images):
+            tgt_key = (target_text, target_image)
+            if tgt_key in seen_tgt:
+                continue
+            if tgt_key in teacher_tgt_map and tgt_key in student_tgt_map:
+                rows["teacher_c"].append(teacher_tgt_map[tgt_key])
+                rows["student_c"].append(student_tgt_map[tgt_key])
+                seen_tgt.add(tgt_key)
+            else:
+                skipped += 1
+
+    if not rows["teacher_q"] or not rows["teacher_c"]:
+        raise ValueError("no labelled query/candidate relation exists in all dumps")
     return {k: np.stack(v, axis=0) for k, v in rows.items()}, skipped
 
 
 def report(pairs, args):
     return {
-        "num_pairs": int(pairs["teacher_q"].shape[0]),
+        "num_queries": int(pairs["teacher_q"].shape[0]),
+        "num_candidates": int(pairs["teacher_c"].shape[0]),
         "topology_discrepancy": batched_topology_discrepancy(
             pairs["teacher_q"],
             pairs["teacher_c"],
@@ -113,6 +121,7 @@ def report(pairs, args):
             num_batches=args.num_batches,
             seed=args.seed,
             h1_topk=args.h1_topk or None,
+            partition_quantiles=tuple(args.partition_quantiles),
         ),
         "neighborhood_preservation": neighborhood_preservation(
             pairs["teacher_q"],
@@ -153,6 +162,13 @@ def main():
     )
     parser.add_argument("--num_batches", type=int, default=50)
     parser.add_argument("--h1_topk", type=int, default=0, help="0 uses every H1 birth")
+    parser.add_argument(
+        "--partition_quantiles",
+        type=float,
+        nargs="+",
+        default=[0.01, 0.05, 0.1, 0.2],
+        help="teacher distance quantiles used for component-partition ARI",
+    )
     parser.add_argument("--recall_ks", type=int, nargs="+", default=[1, 5, 10, 50])
     parser.add_argument("--rank_corr_queries", type=int, default=512)
     parser.add_argument("--seed", type=int, default=0)
@@ -160,7 +176,16 @@ def main():
     args = parser.parse_args()
 
     results = {}
-    if args.teacher_qry:
+    array_paths = (
+        args.teacher_qry,
+        args.teacher_tgt,
+        args.student_qry,
+        args.student_tgt,
+    )
+    if any(array_paths) and not all(array_paths):
+        parser.error("pass all four teacher/student query/target .npy paths")
+
+    if all(array_paths):
         pairs = {
             "teacher_q": np.load(args.teacher_qry),
             "teacher_c": np.load(args.teacher_tgt),
@@ -168,8 +193,13 @@ def main():
             "student_c": np.load(args.student_tgt),
         }
         lengths = {k: v.shape[0] for k, v in pairs.items()}
-        if len(set(lengths.values())) != 1:
-            raise ValueError(f"the four arrays must be row-aligned, got {lengths}")
+        if lengths["teacher_q"] != lengths["student_q"] or lengths[
+            "teacher_c"
+        ] != lengths["student_c"]:
+            raise ValueError(
+                "teacher/student arrays must be aligned within each side, got "
+                f"{lengths}"
+            )
         results["_arrays"] = report(pairs, args)
     else:
         if not (args.teacher_embeddings and args.student_embeddings and args.subsets):

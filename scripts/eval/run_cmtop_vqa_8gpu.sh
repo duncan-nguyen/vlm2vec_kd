@@ -1,14 +1,15 @@
 #!/bin/bash
-# Evaluate CMTop FastVLM VQA on all six MMEB benchmarks while keeping all
+# Evaluate CM-Merge FastVLM VQA on all six MMEB benchmarks while keeping all
 # eight GPUs useful: six student subset jobs plus two teacher embedding jobs.
 set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/home/tensara/work/vlm_2_vec}"
-CKPT="${CKPT:-training/CMTop/fastvlm_vqa/cmtop_h0_seed42/checkpoint-final}"
+CKPT="${CKPT:-training/CMTop/fastvlm_vqa/cmmerge_seed42/checkpoint-final}"
 MMEB_EVAL_DIR="${MMEB_EVAL_DIR:-/mnt/models/vlm_2_vec_storage/eval_images}"
 STUDENT_OUT="${STUDENT_OUT:-$CKPT/mmeb_vqa}"
 TEACHER_OUT="${TEACHER_OUT:-runs/teacher_emb_vqa}"
-TOPOLOGY_OUT="${TOPOLOGY_OUT:-runs/topo_cmtop_h0_seed42_vqa.json}"
+TOPOLOGY_OUT="${TOPOLOGY_OUT:-runs/topo_cmmerge_seed42_vqa.json}"
+TOPOLOGY_BATCH_SIZE="${TOPOLOGY_BATCH_SIZE:-128}"
 HF_HOME="${HF_HOME:-/mnt/models/vlm_2_vec_storage/hf_cache}"
 HF_TOKEN_FILE="${HF_TOKEN_FILE:-/home/tensara/.hf_token_r3}"
 
@@ -136,7 +137,7 @@ if python tools/eval_topology.py \
     --teacher_embeddings "$TEACHER_OUT" \
     --student_embeddings "$STUDENT_OUT" \
     --subsets "${SUBSETS[@]}" \
-    --batch_size 16 \
+    --batch_size "$TOPOLOGY_BATCH_SIZE" \
     --output "$TOPOLOGY_OUT" >"$TOPOLOGY_LOG" 2>&1; then
   stamp "TOPOLOGY_COMPLETE output=${TOPOLOGY_OUT}"
 else

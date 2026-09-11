@@ -196,6 +196,9 @@ class CriterionContext:
             ranks when ``gather`` is on.
         teacher_qry / teacher_pos: pooled teacher embeddings, from the model or
             from ``--teacher_embedding_cache``, gathered the same way.
+        task_ids / candidate_ids: optional row metadata, gathered in exactly the
+            same rank order as the embeddings.  Relation-level criteria use it
+            to reject mixed-task graphs and collapse repeated candidates.
         student_qry_out / student_pos_out: the full tuples from
             ``encode_input`` -- hidden states and attentions, for a criterion
             that reads them. Always the *local* batch, never gathered: those
@@ -211,6 +214,8 @@ class CriterionContext:
         "student_pos_out",
         "student_qry",
         "student_qry_out",
+        "candidate_ids",
+        "task_ids",
         "teacher_pos",
         "teacher_qry",
     )
@@ -247,6 +252,33 @@ class CriterionContext:
                     gather_no_grad(teacher_pos),
                 )
 
+        # Metadata is collated at the batch root and moved to the device by the
+        # training loop.  Keep it optional so older datasets and unit-test
+        # fixtures continue to work, but when present require one id per row.
+        task_ids = batch.get("task_ids")
+        candidate_ids = batch.get("candidate_ids")
+        metadata = {"task_ids": task_ids, "candidate_ids": candidate_ids}
+        for name, ids in metadata.items():
+            if ids is None:
+                continue
+            ids = ids.reshape(-1).to(device=student_qry.device, dtype=torch.long)
+            local_rows = pooled(qry_out).size(0)
+            if ids.numel() != local_rows:
+                raise ValueError(
+                    f"{name} has {ids.numel()} entries for {local_rows} local rows"
+                )
+            if gather:
+                ids = gather_no_grad(ids)
+            metadata[name] = ids
+
+        if (
+            candidate_ids is not None
+            and metadata["candidate_ids"].numel() != student_pos.size(0)
+        ):
+            raise ValueError(
+                "candidate_ids and positive embeddings must have the same gathered length"
+            )
+
         return cls(
             distiller=distiller,
             batch=batch,
@@ -256,6 +288,8 @@ class CriterionContext:
             teacher_pos=teacher_pos,
             student_qry_out=qry_out,
             student_pos_out=pos_out,
+            task_ids=metadata["task_ids"],
+            candidate_ids=metadata["candidate_ids"],
             kwargs=kwargs,
         )
 

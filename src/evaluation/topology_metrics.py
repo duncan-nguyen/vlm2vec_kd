@@ -1,21 +1,24 @@
-"""Metrics for the CMTop evaluation protocol.
+"""Metrics for the CM-Merge evaluation protocol.
 
 Section 4 of ``docs/cross_modal_topological_distillation.md`` asks for two
 things beyond MMEB accuracy: a *topology discrepancy* between the teacher's and
 the student's retrieval relation, and *neighborhood preservation*. A gain that
 does not come with both is not evidence for the claim the paper wants to make.
 
-Everything here is diagnostic, so it uses the exact diagram distance
-(:func:`src.topology.wasserstein2_diagram`, diagonal matches included) rather
-than the bijective approximation the training loss optimises. Reporting the same
-approximation you trained on would beg the question.
+The primary diagnostic is the labelled merge-matrix discrepancy, exactly the
+structural object the main method targets.  Exact diagram distances remain as
+controls (diagonal matches included), alongside full-pool neighborhood fidelity.
 """
 
 import numpy as np
 import torch
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 from scipy.stats import spearmanr
+from sklearn.metrics import adjusted_rand_score
 
 from src.topology import (
+    bipartite_merge_matrix,
     bipartite_mst_edges,
     cosine_distance_matrix,
     h0_deaths,
@@ -47,36 +50,93 @@ def _cross_modal_diagrams(dist_matrix, h1_topk=None):
     )
 
 
+def _component_labels(dist_matrix, threshold):
+    """Connected-component labels of one bipartite threshold graph."""
+    distances = dist_matrix.detach().cpu().numpy()
+    n_q, n_c = distances.shape
+    q_idx, c_idx = np.nonzero(distances <= threshold)
+    rows = np.concatenate([q_idx, n_q + c_idx])
+    cols = np.concatenate([n_q + c_idx, q_idx])
+    graph = csr_matrix(
+        (np.ones(rows.size, dtype=np.uint8), (rows, cols)),
+        shape=(n_q + n_c, n_q + n_c),
+    )
+    return connected_components(graph, directed=False, return_labels=True)[1]
+
+
 def relation_topology_discrepancy(
-    teacher_qry, teacher_cand, student_qry, student_cand, h1_topk=None
+    teacher_qry,
+    teacher_cand,
+    student_qry,
+    student_cand,
+    h1_topk=None,
+    partition_quantiles=(0.01, 0.05, 0.1, 0.2),
 ):
-    """Exact W_2^2 between teacher and student diagrams for one batch.
+    """Labelled merge discrepancy plus barcode controls for one batch.
 
     Args:
-        teacher_qry/teacher_cand/student_qry/student_cand: ``(B, dim)`` arrays.
-            Row ``i`` of the query side and row ``i`` of the candidate side must
-            be the same example on both models -- the relation is what is being
-            compared, so the node labelling has to agree.
+        teacher_qry/teacher_cand/student_qry/student_cand: Embedding arrays.
+            Teacher/student rows must be aligned within each side. Query and
+            candidate pool sizes may differ.
         h1_topk: how many earliest H1 births to compare; ``None`` uses
             ``|Q| + |C|``, matching the ``--cmtop_h1_topk`` training default.
+        partition_quantiles: teacher-distance quantiles at which to compare the
+            labelled component partitions with adjusted Rand index.
 
     Returns:
-        dict with the cross-modal relation discrepancy (the quantity the method
-        targets), the H1-birth discrepancy, and the point-cloud discrepancies
-        that serve as the "ordinary topology" reference.
+        The merge discrepancy, exact barcode controls, MST-edge recall,
+        component agreement and ordinary point-cloud topology references.
     """
     t_q, t_c = _as_tensor(teacher_qry), _as_tensor(teacher_cand)
     s_q, s_c = _as_tensor(student_qry), _as_tensor(student_cand)
+    if t_q.size(0) != s_q.size(0) or t_c.size(0) != s_c.size(0):
+        raise ValueError(
+            "teacher/student node labels must align within query and candidate "
+            f"sides, got Q={t_q.size(0)}/{s_q.size(0)}, "
+            f"C={t_c.size(0)}/{s_c.size(0)}"
+        )
+    if t_q.size(0) == 0 or t_c.size(0) == 0:
+        raise ValueError("the relation needs at least one query and one candidate")
+    if any(not 0.0 <= q <= 1.0 for q in partition_quantiles):
+        raise ValueError("partition_quantiles must lie in [0, 1]")
 
     teacher_cross = cosine_distance_matrix(t_q, t_c)
     student_cross = cosine_distance_matrix(s_q, s_c)
 
+    teacher_merge = bipartite_merge_matrix(teacher_cross)
+    student_merge = bipartite_merge_matrix(student_cross)
+    upper = torch.triu(
+        torch.ones_like(teacher_merge, dtype=torch.bool), diagonal=1
+    )
+
     teacher_h0, teacher_h1 = _cross_modal_diagrams(teacher_cross, h1_topk)
     student_h0, student_h1 = _cross_modal_diagrams(student_cross, h1_topk)
+    teacher_edges = bipartite_mst_edges(teacher_cross)
+    student_edges = bipartite_mst_edges(student_cross)
+    n_c = teacher_cross.size(1)
+    teacher_edge_ids = set(
+        (teacher_edges[0] * n_c + teacher_edges[1]).cpu().tolist()
+    )
+    student_edge_ids = set(
+        (student_edges[0] * n_c + student_edges[1]).cpu().tolist()
+    )
     out = {
+        "cross_modal_merge_l1": float(
+            (teacher_merge - student_merge).abs()[upper].mean()
+        ),
         "cross_modal_h0": wasserstein2_diagram(teacher_h0, student_h0),
         "cross_modal_h1_birth": wasserstein2_diagram(teacher_h1, student_h1),
+        "teacher_mst_edge_recall": len(teacher_edge_ids & student_edge_ids)
+        / max(len(teacher_edge_ids), 1),
     }
+
+    teacher_values = teacher_cross.detach().cpu().numpy()
+    for quantile in partition_quantiles:
+        threshold = float(np.quantile(teacher_values, quantile))
+        teacher_labels = _component_labels(teacher_cross, threshold)
+        student_labels = _component_labels(student_cross, threshold)
+        key = f"component_ari_q{int(round(100 * quantile)):02d}"
+        out[key] = float(adjusted_rand_score(teacher_labels, student_labels))
 
     for name, teacher_points, student_points in (
         ("query_cloud_h0", t_q, s_q),
@@ -103,6 +163,7 @@ def batched_topology_discrepancy(
     num_batches=50,
     seed=0,
     h1_topk=None,
+    partition_quantiles=(0.01, 0.05, 0.1, 0.2),
 ):
     """Average :func:`relation_topology_discrepancy` over random batches.
 
@@ -113,16 +174,32 @@ def batched_topology_discrepancy(
     """
     t_q, t_c = _as_tensor(teacher_qry), _as_tensor(teacher_cand)
     s_q, s_c = _as_tensor(student_qry), _as_tensor(student_cand)
-    n = t_q.size(0)
-    batch_size = min(batch_size, n)
+    if t_q.size(0) != s_q.size(0) or t_c.size(0) != s_c.size(0):
+        raise ValueError("teacher/student arrays must align within each modality")
+    if num_batches < 1:
+        raise ValueError("num_batches must be at least 1")
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+    q_batch_size = min(batch_size, t_q.size(0))
+    c_batch_size = min(batch_size, t_c.size(0))
 
     rng = np.random.default_rng(seed)
     per_batch = []
     for _ in range(num_batches):
-        idx = torch.as_tensor(rng.choice(n, size=batch_size, replace=False))
+        q_idx = torch.as_tensor(
+            rng.choice(t_q.size(0), size=q_batch_size, replace=False)
+        )
+        c_idx = torch.as_tensor(
+            rng.choice(t_c.size(0), size=c_batch_size, replace=False)
+        )
         per_batch.append(
             relation_topology_discrepancy(
-                t_q[idx], t_c[idx], s_q[idx], s_c[idx], h1_topk=h1_topk
+                t_q[q_idx],
+                t_c[c_idx],
+                s_q[q_idx],
+                s_c[c_idx],
+                h1_topk=h1_topk,
+                partition_quantiles=partition_quantiles,
             )
         )
 
@@ -131,9 +208,11 @@ def batched_topology_discrepancy(
         values = np.array([b[key] for b in per_batch], dtype=np.float64)
         summary[key] = {"mean": float(values.mean()), "std": float(values.std())}
     summary["_config"] = {
-        "batch_size": batch_size,
+        "query_batch_size": q_batch_size,
+        "candidate_batch_size": c_batch_size,
         "num_batches": num_batches,
         "seed": seed,
+        "partition_quantiles": list(partition_quantiles),
     }
     return summary
 

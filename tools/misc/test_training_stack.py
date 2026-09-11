@@ -447,7 +447,11 @@ def max_steps_checks():
 
 
 def dataloader_checks():
-    from src.training.dataloader import DEFAULT_NUM_WORKERS, build_train_dataloader
+    from src.training.dataloader import (
+        DEFAULT_NUM_WORKERS,
+        TaskHomogeneousSampler,
+        build_train_dataloader,
+    )
 
     class DS(torch.utils.data.Dataset):
         def __len__(self):
@@ -482,6 +486,40 @@ def dataloader_checks():
     check(
         "a negative worker count means run in-process",
         build_train_dataloader(DS(), lambda b: b, TA()).num_workers == 0,
+    )
+
+    class MultiTaskDS(DS):
+        task_index_ranges = [(0, 12), (12, 24)]
+
+        def __len__(self):
+            return 24
+
+    rank0 = TaskHomogeneousSampler(
+        MultiTaskDS(), local_batch_size=3, seed=7, rank=0, world_size=2
+    )
+    rank1 = TaskHomogeneousSampler(
+        MultiTaskDS(), local_batch_size=3, seed=7, rank=1, world_size=2
+    )
+    rows0, rows1 = list(rank0), list(rank1)
+    global_batches = [
+        rows0[i : i + 3] + rows1[i : i + 3]
+        for i in range(0, len(rows0), 3)
+    ]
+    check(
+        "task sampler makes each gathered DDP batch task-homogeneous",
+        all(all(x < 12 for x in b) or all(x >= 12 for x in b) for b in global_batches),
+    )
+    check(
+        "task sampler gives DDP ranks disjoint slices of the same global batch",
+        all(
+            set(rows0[i : i + 3]).isdisjoint(rows1[i : i + 3])
+            for i in range(0, len(rows0), 3)
+        ),
+    )
+    rank0.set_epoch(1)
+    check(
+        "task sampler reshuffles across epochs",
+        list(rank0) != rows0,
     )
 
 

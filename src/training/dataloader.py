@@ -24,8 +24,9 @@ Everything below exists to keep that work off the critical path:
     asynchronous; without it `non_blocking=True` on the copy is a no-op.
 """
 
+import torch
 import torch.distributed as dist
-from torch.utils.data import DataLoader, DistributedSampler, RandomSampler
+from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, Sampler
 
 from src.utils import print_master
 
@@ -39,8 +40,103 @@ from src.utils import print_master
 DEFAULT_NUM_WORKERS = 4
 
 
-def build_train_sampler(dataset, seed=0):
+class TaskHomogeneousSampler(Sampler):
+    """Shuffle globally while keeping each DDP batch inside one task.
+
+    CM-Merge builds one retrieval graph per optimizer micro-batch.  Mixing, for
+    example, VQA answers and classification labels introduces meaningless
+    cross-task edges.  This sampler first makes full *global* batches within
+    every contiguous task range, then shuffles those batches and gives each rank
+    its disjoint local slice.  Consequently every rank sees the same task at a
+    step and cross-rank gathering reconstructs exactly one task graph.
+    """
+
+    def __init__(
+        self,
+        dataset,
+        local_batch_size,
+        seed=0,
+        rank=None,
+        world_size=None,
+    ):
+        ranges = getattr(dataset, "task_index_ranges", None)
+        if not ranges:
+            raise ValueError(
+                "task-homogeneous sampling requires dataset.task_index_ranges"
+            )
+        if local_batch_size <= 0:
+            raise ValueError("local_batch_size must be positive")
+
+        distributed = dist.is_available() and dist.is_initialized()
+        self.rank = (
+            dist.get_rank() if rank is None and distributed else int(rank or 0)
+        )
+        self.world_size = (
+            dist.get_world_size()
+            if world_size is None and distributed
+            else int(1 if world_size is None else world_size)
+        )
+        if self.world_size <= 0:
+            raise ValueError(f"world_size must be positive, got {self.world_size}")
+        if not 0 <= self.rank < self.world_size:
+            raise ValueError(
+                f"rank must be in [0, {self.world_size}), got {self.rank}"
+            )
+
+        self.task_ranges = [(int(start), int(end)) for start, end in ranges]
+        self.local_batch_size = int(local_batch_size)
+        self.global_batch_size = self.local_batch_size * self.world_size
+        self.seed = int(seed)
+        self.epoch = 0
+        self._global_batch_count = sum(
+            max(0, end - start) // self.global_batch_size
+            for start, end in self.task_ranges
+        )
+        if self._global_batch_count == 0:
+            raise ValueError(
+                "no task contains one full global batch of "
+                f"{self.global_batch_size} examples"
+            )
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+    def _global_batches(self):
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + self.epoch)
+        batches = []
+        for start, end in self.task_ranges:
+            size = end - start
+            usable = (size // self.global_batch_size) * self.global_batch_size
+            if usable == 0:
+                continue
+            indices = torch.randperm(size, generator=generator)[:usable] + start
+            batches.extend(indices.reshape(-1, self.global_batch_size))
+
+        order = torch.randperm(len(batches), generator=generator).tolist()
+        return [batches[i] for i in order]
+
+    def __iter__(self):
+        offset = self.rank * self.local_batch_size
+        stop = offset + self.local_batch_size
+        for global_batch in self._global_batches():
+            yield from global_batch[offset:stop].tolist()
+
+    def __len__(self):
+        return self._global_batch_count * self.local_batch_size
+
+
+def build_train_sampler(
+    dataset,
+    seed=0,
+    batch_size=None,
+    task_homogeneous=False,
+):
     """Shuffling sampler, sharded across ranks when running distributed."""
+    if task_homogeneous:
+        if batch_size is None:
+            raise ValueError("batch_size is required for task-homogeneous sampling")
+        return TaskHomogeneousSampler(dataset, batch_size, seed=seed)
     if dist.is_available() and dist.is_initialized():
         return DistributedSampler(dataset, shuffle=True, seed=seed, drop_last=True)
     return RandomSampler(dataset)
@@ -64,7 +160,16 @@ def build_train_dataloader(dataset, collator, training_args, sampler=None):
         the others hangs the all-reduce.
     """
     if sampler is None:
-        sampler = build_train_sampler(dataset, seed=getattr(training_args, "seed", 0))
+        task_homogeneous = (
+            getattr(training_args, "kd_loss_type", None) == "cmtop"
+            and getattr(training_args, "cmtop_task_homogeneous", True)
+        )
+        sampler = build_train_sampler(
+            dataset,
+            seed=getattr(training_args, "seed", 0),
+            batch_size=training_args.per_device_train_batch_size,
+            task_homogeneous=task_homogeneous,
+        )
 
     requested = training_args.dataloader_num_workers
     num_workers = 0 if requested < 0 else (requested or DEFAULT_NUM_WORKERS)
@@ -86,6 +191,6 @@ def build_train_dataloader(dataset, collator, training_args, sampler=None):
         f"DataLoader: num_workers={num_workers}, "
         f"pin_memory={kwargs['pin_memory']}, "
         f"prefetch_factor={kwargs.get('prefetch_factor')}, "
-        f"batch_size={kwargs['batch_size']}"
+        f"batch_size={kwargs['batch_size']}, sampler={type(sampler).__name__}"
     )
     return DataLoader(dataset, **kwargs)
