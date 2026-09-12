@@ -446,6 +446,35 @@ def max_steps_checks():
     )
 
 
+def criterion_hook_checks():
+    """Legacy criteria may predate the optional parameter-building hook."""
+    from src.training.entrypoint import attach_criterion
+
+    class Legacy(nn.Module):
+        pass
+
+    distiller = FakeDistiller()
+    criterion = Legacy()
+    check(
+        "a legacy criterion without build_parameters still attaches",
+        attach_criterion(distiller, criterion) is criterion,
+    )
+
+    class WithHook(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.ones(()))
+            self.called = False
+
+        def build_parameters(self, owner):
+            self.called = owner is distiller
+
+    criterion = WithHook()
+    attach_criterion(distiller, criterion)
+    check("a criterion's build_parameters hook is still called", criterion.called)
+    check("a trainable criterion is registered on the distiller", distiller.criterion is criterion)
+
+
 def dataloader_checks():
     from src.training.dataloader import (
         DEFAULT_NUM_WORKERS,
@@ -625,6 +654,7 @@ def main():
         ("loss meter", loss_meter_checks),
         ("gradient accumulation", grad_accumulation_checks),
         ("max steps", max_steps_checks),
+        ("criterion hook", criterion_hook_checks),
         ("dataloader", dataloader_checks),
     ]:
         print(f"\n--- {name} ---")

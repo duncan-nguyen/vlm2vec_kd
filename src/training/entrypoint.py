@@ -74,7 +74,9 @@ def attach_criterion(distiller, criterion):
     before `DistillTrainer` moves it to the device and wraps it in DDP, or they
     stay on the CPU in fp32 and are never synchronised.
     """
-    criterion.build_parameters(distiller)
+    build_parameters = getattr(criterion, "build_parameters", None)
+    if callable(build_parameters):
+        build_parameters(distiller)
     if any(p.requires_grad for p in criterion.parameters()):
         # Assigning an nn.Module attribute registers it as a submodule.
         distiller.criterion = criterion
