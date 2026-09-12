@@ -28,6 +28,7 @@ from transformers import AutoConfig, HfArgumentParser
 from src.arguments import DataArguments, ModelArguments, TrainingArguments
 from src.data.collator.eval_collator import EvalCollator
 from src.data.dataset.mmeb_dataset import EvalDataset
+from src.evaluation.dataloader import build_eval_dataloader
 from src.evaluation.eval_utils import batched_predict
 from src.model.model import MMEBModel
 from src.model.processor import COLPALI, get_backbone_name, load_processor
