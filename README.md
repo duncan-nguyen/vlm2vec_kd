@@ -213,12 +213,14 @@ evaluation code paths (`low` is 448 in `src/distiller.py` and 128 in
 `src/data/dataset/mmeb_dataset.py`), so a preset silently changes preprocessing
 between the two.
 
-### Label-aware cross-modal merge distillation (CM-Merge)
+### Correspondence-aware cross-modal merge distillation (CM-Merge)
 
-`--kd_loss_type cmtop` now distils the labelled merge hierarchy of the
-query-candidate filtration. Unlike a sorted H0 barcode, it retains which
-query/candidate pairs merge at each threshold and therefore detects a candidate
-permutation that destroys retrieval while preserving the barcode.
+`--kd_loss_type cmtop` now distils an identity-preserving merge hierarchy of the
+query-candidate filtration. Here, identity refers to the row-wise correspondence
+between teacher and student query/candidate vertices, not to dataset class labels.
+Unlike a sorted H0 barcode, the objective retains which query/candidate pairs
+merge at each threshold and therefore detects a candidate permutation that
+destroys retrieval while preserving the barcode.
 
 ```bash
 # optional but recommended: encode the frozen teacher once, then every variant

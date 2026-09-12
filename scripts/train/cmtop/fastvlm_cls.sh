@@ -38,7 +38,7 @@ CACHE_FLAGS=()
 if [ -n "$TEACHER_CACHE" ]; then
   CACHE_FLAGS=(--teacher_embedding_cache "$TEACHER_CACHE")
 fi
-# lambda_Merge. One global coefficient for the labelled merge-time discrepancy.
+# lambda_Merge. One global coefficient for the identity-aligned merge-time discrepancy.
 # Tune it on development data, then freeze it across tasks and seeds.
 CMTOP_WEIGHT="${CMTOP_WEIGHT:-1.0}"
 KD_WEIGHT="${KD_WEIGHT:-0.3}"
@@ -70,7 +70,7 @@ case "$VARIANT" in
   critical_edges)   # correspondence-aware MST-edge baseline
     KD_FLAGS=(--kd_weight 0.0 --cmtop_weight "$CMTOP_WEIGHT"
               --cmtop_endpoint_kd none --cmtop_mode critical_edges) ;;
-  cmmerge)          # main: full labelled merge hierarchy
+  cmmerge)          # main: full identity-preserving merge hierarchy
     KD_FLAGS=(--kd_weight 0.0 --cmtop_weight "$CMTOP_WEIGHT"
               --cmtop_endpoint_kd none --cmtop_mode merge) ;;
   barcode_h0_h1|cmtop_h0_h1) # legacy barcode + H1-birth control

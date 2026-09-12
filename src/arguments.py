@@ -327,7 +327,7 @@ class TrainingArguments(TrainingArguments):
     cmtop_mode: str = field(
         default="merge",
         metadata={
-            "help": "structural target, '+'-joined: merge (labelled bipartite merge hierarchy; main), critical_edges, cross_modal (legacy barcode H0/H1), point_cloud, or union"
+            "help": "structural target, '+'-joined: merge (identity-preserving bipartite merge hierarchy; main), critical_edges, cross_modal (legacy barcode H0/H1), point_cloud, or union"
         },
     )
     cmtop_h0_weight: float = field(
@@ -365,13 +365,13 @@ class TrainingArguments(TrainingArguments):
     cmtop_reduction: str = field(
         default="mean",
         metadata={
-            "help": "mean (batch-size independent) or sum over labelled vertex pairs / legacy bars"
+            "help": "mean (batch-size independent) or sum over indexed vertex pairs / legacy bars"
         },
     )
     cmtop_merge_block: str = field(
         default="all",
         metadata={
-            "help": "CM-Merge pair block: all labelled vertex pairs (main) or cross for query-candidate pairs only"
+            "help": "CM-Merge pair block: all identity-aligned vertex pairs (main) or cross for query-candidate pairs only"
         },
     )
     cmtop_task_homogeneous: bool = field(

@@ -7,13 +7,13 @@ candidates C the filtration is the bipartite graph
 
     G_eps = (Q u C, {(q_i, c_j) : D_ij <= eps}),    D_ij = 1 - cos(q_i, c_j)
 
-The main CM-Merge objective compares the *labelled merge hierarchy* of the
+The main CM-Merge objective compares the *identity-preserving merge hierarchy* of the
 teacher's and student's ``G_eps``.  For vertices ``a`` and ``b`` its merge time
 is the minimax distance
 
     U[a, b] = min_path(a -> b) max_edge_on_path D[edge].
 
-Equivalently, ``U[a, b]`` is the smallest threshold at which the two labelled
+Equivalently, ``U[a, b]`` is the smallest threshold at which the two indexed
 vertices become connected.  It is read exactly from the bottleneck edge on the
 unique path between them in an MST.  Unlike a sorted persistence diagram, the
 matrix retains which query/candidate participated in every merge and therefore
@@ -116,7 +116,7 @@ def bipartite_merge_witnesses(
     dist_matrix: Tensor,
     edges: tuple[Tensor, Tensor] | None = None,
 ) -> tuple[Tensor, Tensor]:
-    """MST bottleneck edge witnessing every labelled pair's merge time.
+    """MST bottleneck edge witnessing every indexed pair's merge time.
 
     The returned matrices have shape ``(Bq + Bc, Bq + Bc)``.  At an
     off-diagonal location ``(a, b)``, ``(query_idx[a,b], candidate_idx[a,b])``
@@ -136,7 +136,7 @@ def bipartite_merge_witnesses(
     n_q, n_c = dist_matrix.shape
     if n_q == 0 or n_c == 0:
         raise ValueError(
-            "a labelled merge hierarchy needs at least one query and one candidate"
+            "an identity-preserving merge hierarchy needs at least one query and one candidate"
         )
 
     if edges is None:
@@ -213,7 +213,7 @@ def bipartite_merge_matrix(
     dist_matrix: Tensor,
     edges: tuple[Tensor, Tensor] | None = None,
 ) -> Tensor:
-    """Exact labelled merge-time matrix of a complete bipartite filtration.
+    """Exact identity-preserving merge-time matrix of a complete bipartite filtration.
 
     The diagonal is zero.  Every off-diagonal entry is gathered from its MST
     bottleneck witness, so gradients flow to precisely the distances that

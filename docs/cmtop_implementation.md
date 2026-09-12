@@ -9,7 +9,7 @@ launcher compatibility; the default method is now CM-Merge.
 
 | file | role |
 | --- | --- |
-| [src/topology.py](../src/topology.py) | bipartite MST, labelled merge witnesses/matrix, legacy persistence primitives |
+| [src/topology.py](../src/topology.py) | bipartite MST, identity-preserving merge witnesses/matrix, legacy persistence primitives |
 | [src/criterions/cross_modal_topology.py](../src/criterions/cross_modal_topology.py) | CM-Merge objective and all structural controls |
 | [src/distiller.py](../src/distiller.py) | stable task/candidate identities and collation |
 | [src/training/dataloader.py](../src/training/dataloader.py) | task-homogeneous global batching under DDP |
@@ -27,7 +27,7 @@ graph and
 U[a,b] = min over paths a→b (maximum edge distance on the path).
 ```
 
-`U[a,b]` is exactly the first filtration threshold where the two labelled
+`U[a,b]` is exactly the first filtration threshold where the two indexed
 vertices share a connected component. It can be recovered from any MST: it is
 the largest edge on the unique MST path between `a` and `b`.
 
@@ -52,10 +52,10 @@ for the paper's block ablation; `all` is the default.
 
 A sorted H0 barcode keeps merge heights but discards which nodes merged. A
 candidate-column permutation can therefore give zero barcode loss while
-changing retrieval at rank 1. CM-Merge compares the labelled matrix `U`, so the
+changing retrieval at rank 1. CM-Merge compares the identity-aligned matrix `U`, so the
 same permutation changes the loss.
 
-Two data constraints make those labels meaningful:
+Two data constraints make those identities unambiguous:
 
 - `TaskHomogeneousSampler` forms every *global* DDP batch inside one dataset
   task. All ranks receive disjoint slices of the same task batch before the
@@ -83,7 +83,7 @@ target changes.
 | `pointcloud_h0` | ordinary per-modality H0 | `--cmtop_mode point_cloud` |
 | `barcode_h0` | permutation-blind bipartite H0 | `--cmtop_mode cross_modal` |
 | `critical_edges` | correspondence-aware MST edges | `--cmtop_mode critical_edges` |
-| `cmmerge` | **full labelled merge hierarchy** | `--cmtop_mode merge` |
+| `cmmerge` | **full identity-preserving merge hierarchy** | `--cmtop_mode merge` |
 | `barcode_h0_h1` | legacy H0 + H1-birth control | `--cmtop_mode cross_modal --cmtop_h1_weight 0.1` |
 
 The legacy names `cmtop_h0` and `cmtop_h0_h1` remain aliases in launchers, but
@@ -100,7 +100,7 @@ done
 Useful structural ablations after the main grid:
 
 ```bash
-# labelled query-candidate entries only
+# identity-aligned query-candidate entries only
 VARIANT=cmmerge bash scripts/train/cmtop/fastvlm_cls.sh --cmtop_merge_block cross
 
 # demonstrate why canonical candidates matter
@@ -143,10 +143,10 @@ python tools/misc/test_teacher_cache.py
 The CM-Merge checks independently verify:
 
 - the MST result equals Floyd-Warshall minimax connectivity;
-- every labelled pair has a valid bottleneck witness;
+- every indexed vertex pair has a valid bottleneck witness;
 - symmetry, zero diagonal and the L-infinity stability bound;
 - finite non-zero gradients through witness distances;
-- simultaneous relabelling equivariance;
+- equivariance to a simultaneous permutation of teacher/student identities;
 - the candidate-permutation counterexample separating CM-Merge from H0;
 - candidate deduplication, mixed-task rejection and every ablation mode;
 - disjoint, task-consistent DDP sampler slices.
@@ -160,7 +160,7 @@ sampler rejects a dataset where no task can form one.
 
 MST selection runs on CPU through SciPy and returns an `O((|Q|+|C|)^2)` merge
 matrix. This is modest at the intended batch size but should be profiled before
-going substantially above 256 labelled vertices per side.
+going substantially above 256 indexed vertices per side.
 
 CM-Merge reads only final teacher embeddings and therefore supports
 `--teacher_embedding_cache`. Precompute once and reuse the same cache across

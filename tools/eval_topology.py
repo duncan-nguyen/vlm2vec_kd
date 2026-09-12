@@ -104,7 +104,7 @@ def align_pairs(eval_data, teacher_maps, student_maps):
                 skipped += 1
 
     if not rows["teacher_q"] or not rows["teacher_c"]:
-        raise ValueError("no labelled query/candidate relation exists in all dumps")
+        raise ValueError("no identity-aligned query/candidate relation exists in all dumps")
     return {k: np.stack(v, axis=0) for k, v in rows.items()}, skipped
 
 

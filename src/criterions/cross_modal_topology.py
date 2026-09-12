@@ -1,12 +1,12 @@
-"""Label-aware cross-modal merge distillation (CM-Merge).
+"""Correspondence-aware cross-modal merge distillation (CM-Merge).
 
 Implements ``docs/cross_modal_topological_distillation.md``:
 
     L = L_retrieval + cmtop_weight * mean_{a<b} |U_t[a,b] - U_s[a,b]|
 
-``U[a,b]`` is the threshold at which labelled vertices ``a`` and ``b`` first
-become connected in the bipartite query-candidate filtration.  It preserves the
-teacher's hierarchy *and* its correspondence to concrete examples; a candidate
+``U[a,b]`` is the threshold at which indexed vertices ``a`` and ``b`` first
+become connected in the bipartite query-candidate filtration. It preserves the
+teacher's hierarchy *and* the identity correspondence of concrete examples; a candidate
 permutation can retain the old H0 barcode exactly but changes ``U``.  The
 criterion also contains the controls needed to isolate that contribution:
 
@@ -18,7 +18,7 @@ criterion also contains the controls needed to isolate that contribution:
 | point-cloud H0 KD                | ``--cmtop_mode point_cloud``                                |
 | barcode H0 KD                    | ``--cmtop_mode cross_modal``                                |
 | critical-edge KD                 | ``--cmtop_mode critical_edges``                            |
-| labelled CM-Merge (main)         | ``--cmtop_mode merge``                                     |
+| correspondence-aware CM-Merge    | ``--cmtop_mode merge``                                     |
 
 Only the teacher's final embeddings are read -- no hidden states, no attention
 maps -- which is the black-box property the brief asks to preserve.
@@ -142,7 +142,7 @@ class CrossModalTopologyLoss(DistillCriterion):
         return values.mean() if self.reduction == "mean" else values.sum()
 
     def _merge_loss(self, student_dists, teacher_dists):
-        """L1 discrepancy between labelled minimax connectivity matrices."""
+        """L1 discrepancy between identity-aligned minimax connectivity matrices."""
         student_merge = bipartite_merge_matrix(student_dists)
         teacher_merge = bipartite_merge_matrix(teacher_dists)
         n_q, n_c = student_dists.shape

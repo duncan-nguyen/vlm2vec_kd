@@ -83,7 +83,7 @@ _SPECS = (
         student_attentions=False,
         teacher_attentions=False,
         teacher_embedding_only=True,
-        summary="CM-Merge: labelled multiscale connectivity of the retrieval relation.",
+        summary="CM-Merge: correspondence-aware multiscale connectivity of the retrieval relation.",
     ),
     CriterionSpec(
         name="talas",

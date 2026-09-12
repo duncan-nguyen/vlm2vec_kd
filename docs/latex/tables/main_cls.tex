@@ -1,0 +1,112 @@
+\begin{table*}[!b]
+    \centering
+    \caption{Classification results for the two teacher--student settings.
+    Results are reported as mean $\pm$ standard deviation; higher is better.
+    A dash denotes a result that is not yet available.}
+    \label{tab:main-cls}
+    \setlength{\tabcolsep}{3.2pt}
+    \renewcommand{\arraystretch}{1.08}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{c|*{6}{c}|*{6}{c}}
+        \toprule
+        \textbf{Method}
+        & \multicolumn{6}{c}{\textbf{CLS (IOD)}}
+        & \multicolumn{6}{c}{\textbf{CLS (OOD)}} \\
+        \cmidrule(lr){2-7}\cmidrule(lr){8-13}
+        & \textbf{IN-1K} & \textbf{N24News} & \textbf{Hateful}
+        & \textbf{VOC07} & \textbf{SUN397} & \textbf{Avg}
+        & \textbf{Place365} & \textbf{IN-A} & \textbf{IN-R}
+        & \textbf{ObjectNet} & \textbf{Country211} & \textbf{Avg} \\
+        \midrule
+        \multicolumn{13}{c}{\emph{B3-Qwen2-2B $\rightarrow$ FastVLM-0.5B}} \\
+        \midrule
+        Teacher & \singlescore{82.9} & \singlescore{79.2}
+                & \singlescore{56.2} & \singlescore{88.0}
+                & \singlescore{80.9} & \singlescore{77.4}
+                & -- & -- & -- & -- & -- & -- \\
+        SFT
+            & \score{52.57}{0.29} & \score{68.90}{0.50}
+            & \score{59.99}{0.06} & \score{78.23}{0.50}
+            & \score{65.00}{0.26} & \score{64.93}{0.16}
+            & -- & -- & -- & -- & -- & -- \\
+        MSE
+            & \score{52.90}{0.26} & \score{70.17}{0.40}
+            & \score{58.33}{0.12} & \score{78.03}{0.15}
+            & \score{65.17}{0.25} & \score{64.92}{0.07}
+            & -- & -- & -- & -- & -- & -- \\
+        RKD
+            & \score{53.73}{0.32} & \score{70.40}{0.17}
+            & \score{60.97}{0.21} & \score{79.00}{0.36}
+            & \score{65.97}{0.21} & \score{66.17}{0.14}
+            & -- & -- & -- & -- & -- & -- \\
+        CKD
+            & \score{53.13}{0.21} & \score{70.47}{0.23}
+            & \bestscore{61.00}{0.20} & \score{78.47}{0.32}
+            & \score{66.97}{0.25} & \score{66.01}{0.08}
+            & -- & -- & -- & -- & -- & -- \\
+        EMO
+            & \score{52.60}{0.20} & \score{68.27}{0.12}
+            & \score{59.10}{0.20} & \score{80.03}{0.55}
+            & \score{59.20}{0.17} & \score{63.84}{0.12}
+            & -- & -- & -- & -- & -- & -- \\
+        EM-KD
+            & \score{53.20}{0.17} & \score{67.23}{0.12}
+            & \score{59.20}{0.17} & \score{78.23}{0.21}
+            & \score{63.33}{0.15} & \score{64.24}{0.05}
+            & -- & -- & -- & -- & -- & -- \\
+        HieRD
+            & \bestscore{55.93}{0.21} & \bestscore{71.27}{0.38}
+            & \score{60.83}{0.47} & \bestscore{80.37}{0.25}
+            & \bestscore{67.13}{0.12} & \bestscore{67.11}{0.06}
+            & -- & -- & -- & -- & -- & -- \\
+        \textbf{Ours}
+            & -- & -- & -- & -- & -- & --
+            & -- & -- & -- & -- & -- & -- \\
+        \midrule
+        \multicolumn{13}{c}{\emph{B3-Qwen2-2B $\rightarrow$ LLaVA-OneVision-0.5B}} \\
+        \midrule
+        Teacher & \singlescore{82.9} & \singlescore{79.2}
+                & \singlescore{56.2} & \singlescore{88.0}
+                & \singlescore{80.9} & \singlescore{77.4}
+                & -- & -- & -- & -- & -- & -- \\
+        SFT
+            & \score{55.37}{0.25} & \score{66.90}{0.20}
+            & \score{57.17}{0.15} & \score{83.97}{0.06}
+            & \score{65.73}{0.25} & \score{65.83}{0.08}
+            & -- & -- & -- & -- & -- & -- \\
+        MSE
+            & \score{55.07}{0.21} & \score{66.77}{0.55}
+            & \score{56.10}{0.17} & \score{84.30}{0.26}
+            & \score{66.97}{0.29} & \score{65.84}{0.18}
+            & -- & -- & -- & -- & -- & -- \\
+        RKD
+            & \score{55.20}{0.17} & \score{67.03}{0.25}
+            & \score{57.57}{0.45} & \score{83.60}{0.36}
+            & \score{66.97}{0.15} & \score{66.07}{0.03}
+            & -- & -- & -- & -- & -- & -- \\
+        CKD
+            & \score{56.67}{0.42} & \score{66.97}{0.31}
+            & \score{58.47}{0.15} & \score{84.47}{0.47}
+            & \score{68.17}{0.35} & \score{66.95}{0.24}
+            & -- & -- & -- & -- & -- & -- \\
+        EMO
+            & \score{55.97}{0.15} & \score{66.20}{0.17}
+            & \score{56.63}{0.21} & \score{83.33}{0.31}
+            & \score{66.10}{0.26} & \score{65.65}{0.08}
+            & -- & -- & -- & -- & -- & -- \\
+        EM-KD
+            & \score{55.43}{0.21} & \score{63.37}{0.06}
+            & \score{53.33}{0.23} & \score{82.63}{0.15}
+            & \score{65.17}{0.15} & \score{65.59}{0.01}
+            & -- & -- & -- & -- & -- & -- \\
+        HieRD
+            & \bestscore{63.27}{0.06} & \bestscore{73.63}{0.15}
+            & \bestscore{59.27}{0.06} & \bestscore{85.73}{0.06}
+            & \bestscore{68.50}{0.17} & \bestscore{70.08}{0.05}
+            & -- & -- & -- & -- & -- & -- \\
+        \textbf{Ours}
+            & -- & -- & -- & -- & -- & --
+            & -- & -- & -- & -- & -- & -- \\
+        \bottomrule
+    \end{tabular}}
+\end{table*}

@@ -1,7 +1,8 @@
 # CM-Merge — runbook
 
-CM-Merge distils the labelled merge hierarchy of the query-candidate retrieval
-relation. Read the [research brief](../../../docs/cross_modal_topological_distillation.md)
+CM-Merge distils the identity-preserving merge hierarchy of the query-candidate
+retrieval relation. “Identity” here means teacher/student row correspondence,
+not an extra dataset class-label input. Read the [research brief](../../../docs/cross_modal_topological_distillation.md)
 and [implementation notes](../../../docs/cmtop_implementation.md) before changing
 the objective or batch semantics.
 
@@ -73,7 +74,7 @@ The same interface is available for:
 | `pointcloud_h0` | ordinary topology of each modality |
 | `barcode_h0` | bipartite H0 barcode without node correspondence |
 | `critical_edges` | correspondence-aware MST-edge control |
-| `cmmerge` | **main labelled merge-hierarchy method** |
+| `cmmerge` | **main correspondence-aware merge-hierarchy method** |
 | `barcode_h0_h1` | optional legacy barcode control |
 
 Only `endpoint` creates the teacher-to-student projector. The other variants do
@@ -115,7 +116,7 @@ python tools/eval_mmeb.py \
   --per_device_eval_batch_size 16 --image_dir "${MMEB_EVAL_DIR:-./eval_images}" \
   --image_resolution 448 --tgt_prefix_mod
 
-# Labelled structure and neighborhood fidelity
+# Correspondence-aware structure and neighborhood fidelity
 python tools/eval_topology.py \
   --teacher_embeddings runs/teacher_emb \
   --student_embeddings training/CMTop/cmmerge_seed42/checkpoint-final/mmeb_cls \
@@ -125,7 +126,7 @@ python tools/eval_topology.py \
 
 Read `cross_modal_merge_l1` as the primary structural metric. The H0/H1
 diagram distances are permutation-blind controls. `recall@k` and `spearman` are
-fidelity to the teacher; MST-edge recall and component ARI test labelled
+fidelity to the teacher; MST-edge recall and component ARI test identity-aligned
 connectivity without reusing the training scalar. MMEB accuracy is performance
 against ground truth; report both.
 

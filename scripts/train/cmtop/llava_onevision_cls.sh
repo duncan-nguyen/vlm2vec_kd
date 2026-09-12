@@ -1,7 +1,7 @@
 #!/bin/bash
 # CMTop -- LLaVA-OneVision-0.5B, CLS
-# CM-Merge: distil labelled multiscale connectivity of the query-candidate
-# retrieval relation rather than an unlabeled persistence barcode.
+# CM-Merge: distil correspondence-aware multiscale connectivity of the
+# query-candidate relation rather than an identity-agnostic persistence barcode.
 #
 # Method:  kd_loss_type cmtop
 # Teacher: raghavlite/B3_Qwen2_2B (qwen2_vl)  ->  student LLaVA-OneVision-0.5B (llava_onevision)

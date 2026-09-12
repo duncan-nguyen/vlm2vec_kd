@@ -406,14 +406,14 @@ def main():
     merge = bipartite_merge_matrix(dist)
     merge_reference = minimax_connectivity_reference(dist.numpy())
     check(
-        "labelled merge matrix equals definition-level minimax paths",
+        "identity-preserving merge matrix equals definition-level minimax paths",
         np.allclose(merge.numpy(), merge_reference),
         f"max diff {np.abs(merge.numpy() - merge_reference).max():.2e}",
     )
     witness_q, witness_c = bipartite_merge_witnesses(dist, (rows, cols))
     off_diagonal = ~torch.eye(n_q + n_c, dtype=torch.bool)
     check(
-        "every off-diagonal labelled pair has a valid MST witness",
+        "every off-diagonal indexed pair has a valid MST witness",
         bool((witness_q[off_diagonal] >= 0).all())
         and bool((witness_c[off_diagonal] >= 0).all()),
     )
@@ -490,7 +490,7 @@ def main():
         ),
     )
     check(
-        "labelled merge times stay exact with duplicate zero-distance rows",
+        "identity-preserving merge times stay exact with duplicate zero-distance rows",
         np.allclose(
             bipartite_merge_matrix(dup_dist).numpy(),
             minimax_connectivity_reference(dup_dist.numpy()),
@@ -506,7 +506,7 @@ def main():
         and h1_births(single, bipartite_mst_edges(single)).numel() == 0,
     )
     check(
-        "1x1 relation has the expected labelled merge matrix",
+        "1x1 relation has the expected identity-preserving merge matrix",
         torch.allclose(
             bipartite_merge_matrix(single),
             torch.tensor(
@@ -617,7 +617,7 @@ def main():
     perm_c = torch.randperm(n_c)
     permuted = cosine_distance_matrix(q[perm_q], c[perm_c])
     check(
-        "H0 barcode is invariant to relabelling the batch",
+        "H0 barcode is invariant to permuting batch identities",
         np.allclose(
             h0_deaths(permuted, bipartite_mst_edges(permuted)).numpy(),
             fast_deaths.numpy(),
@@ -625,7 +625,7 @@ def main():
     )
     vertex_perm = torch.cat([perm_q, n_q + perm_c])
     check(
-        "labelled merge hierarchy is equivariant to simultaneous relabelling",
+        "merge hierarchy is equivariant to simultaneous identity permutation",
         torch.allclose(
             bipartite_merge_matrix(permuted),
             merge[vertex_perm][:, vertex_perm],

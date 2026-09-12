@@ -1,0 +1,52 @@
+\documentclass{article}
+
+% Keep the bundled ICLR template isolated from the paper source.
+\makeatletter
+\def\input@path{{style/}}
+\makeatother
+\usepackage{iclr2027_conference,times}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{dblfloatfix}
+\usepackage{graphicx}
+\usepackage{microtype}
+\usepackage{url}
+\usepackage{hyperref}
+
+\input{commands.tex}
+
+\graphicspath{{../assets/}{figures/}}
+
+\title{[Paper title]}
+
+% Keep authors anonymous for submission.
+\author{Anonymous authors}
+
+% Uncomment only for the camera-ready version.
+% \iclrfinalcopy
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\input{sections/abstract.tex}
+\end{abstract}
+
+\input{sections/introduction.tex}
+\input{sections/related_work.tex}
+\input{sections/method.tex}
+\input{sections/experiments.tex}
+\input{sections/conclusion.tex}
+
+% Enable these lines after adding the first citation.
+% \bibliography{references}
+% \bibliographystyle{style/iclr2027_conference}
+
+\appendix
+\input{sections/appendix.tex}
+
+\end{document}

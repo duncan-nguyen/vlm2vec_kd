@@ -5,7 +5,7 @@ things beyond MMEB accuracy: a *topology discrepancy* between the teacher's and
 the student's retrieval relation, and *neighborhood preservation*. A gain that
 does not come with both is not evidence for the claim the paper wants to make.
 
-The primary diagnostic is the labelled merge-matrix discrepancy, exactly the
+The primary diagnostic is the identity-aligned merge-matrix discrepancy, exactly the
 structural object the main method targets.  Exact diagram distances remain as
 controls (diagonal matches included), alongside full-pool neighborhood fidelity.
 """
@@ -72,7 +72,7 @@ def relation_topology_discrepancy(
     h1_topk=None,
     partition_quantiles=(0.01, 0.05, 0.1, 0.2),
 ):
-    """Labelled merge discrepancy plus barcode controls for one batch.
+    """Identity-aligned merge discrepancy plus barcode controls for one batch.
 
     Args:
         teacher_qry/teacher_cand/student_qry/student_cand: Embedding arrays.
@@ -81,7 +81,7 @@ def relation_topology_discrepancy(
         h1_topk: how many earliest H1 births to compare; ``None`` uses
             ``|Q| + |C|``, matching the ``--cmtop_h1_topk`` training default.
         partition_quantiles: teacher-distance quantiles at which to compare the
-            labelled component partitions with adjusted Rand index.
+            identity-aligned component partitions with adjusted Rand index.
 
     Returns:
         The merge discrepancy, exact barcode controls, MST-edge recall,
@@ -91,7 +91,7 @@ def relation_topology_discrepancy(
     s_q, s_c = _as_tensor(student_qry), _as_tensor(student_cand)
     if t_q.size(0) != s_q.size(0) or t_c.size(0) != s_c.size(0):
         raise ValueError(
-            "teacher/student node labels must align within query and candidate "
+            "teacher/student row identities must align within query and candidate "
             f"sides, got Q={t_q.size(0)}/{s_q.size(0)}, "
             f"C={t_c.size(0)}/{s_c.size(0)}"
         )
