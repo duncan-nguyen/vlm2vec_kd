@@ -9,6 +9,7 @@ from src.utils import print_rank
 import spacy
 from spacy.matcher import Matcher
 from src import profiling
+from .base import scale_gradient_for_ddp
 from .text_spans import build_span_cache, filter_overlapping_spans, get_spans_offsets
 from .vision_clustering import (
     cluster_vision_tokens,
@@ -666,22 +667,28 @@ class SpanProposeCriterionWeighted(nn.Module):
             self.process_rank = 0
         
         self.args = args
-        
-        # Khởi tạo spacy và matcher một lần
-        self.nlp = spacy.load("en_core_web_sm")
-        self.matcher = Matcher(self.nlp.vocab)
-        VERB_PHRASE_PATTERN = [
-            {"POS": "AUX", "OP": "*"},
-            {"POS": "ADV", "OP": "*"},
-            {"POS": "VERB", "OP": "+"},
-            {"POS": "ADV", "OP": "*"},
-        ]
-        self.matcher.add("VERB_PHRASE", [VERB_PHRASE_PATTERN])
+        self.contrastive_only = bool(getattr(args, "hierd_contrastive_only", False))
 
-        # text -> (spans, words) memo. The query side of an MMEB subset is one
-        # instruction repeated for every sample, so this alone removes about
-        # half the spaCy work; set VLM2VEC_SPAN_CACHE to keep it across runs.
-        self.span_cache = build_span_cache(rank=self.process_rank)
+        if self.contrastive_only:
+            self.nlp = None
+            self.matcher = None
+            self.span_cache = None
+        else:
+            # Khởi tạo spacy và matcher một lần
+            self.nlp = spacy.load("en_core_web_sm")
+            self.matcher = Matcher(self.nlp.vocab)
+            VERB_PHRASE_PATTERN = [
+                {"POS": "AUX", "OP": "*"},
+                {"POS": "ADV", "OP": "*"},
+                {"POS": "VERB", "OP": "+"},
+                {"POS": "ADV", "OP": "*"},
+            ]
+            self.matcher.add("VERB_PHRASE", [VERB_PHRASE_PATTERN])
+
+            # text -> (spans, words) memo. The query side of an MMEB subset is one
+            # instruction repeated for every sample, so this alone removes about
+            # half the spaCy work; set VLM2VEC_SPAN_CACHE to keep it across runs.
+            self.span_cache = build_span_cache(rank=self.process_rank)
         
         self.teacher_patch_size = getattr(args, 'teacher_patch_size', 28)
         self.student_patch_size = getattr(args, 'student_patch_size', 64)
@@ -693,7 +700,7 @@ class SpanProposeCriterionWeighted(nn.Module):
         t = t.contiguous()
         all_tensors = [torch.empty_like(t) for _ in range(self.world_size)]
         dist.all_gather(all_tensors, t)
-        all_tensors[self.process_rank] = t
+        all_tensors[self.process_rank] = scale_gradient_for_ddp(t, self.world_size)
         all_tensors = torch.cat(all_tensors, dim=0)
         return all_tensors
     
@@ -716,28 +723,9 @@ class SpanProposeCriterionWeighted(nn.Module):
         student_qry_input = input_data['student_inputs']['qry']
         student_pos_input = input_data['student_inputs']['pos']
         
-        teacher_qry_input = input_data['teacher_inputs']['qry']
-        teacher_pos_input = input_data['teacher_inputs']['pos']
-        
-        qry_image_sizes = input_data.get('qry_image_sizes', None)  # List of (W, H) cho mỗi sample
-        pos_image_sizes = input_data.get('pos_image_sizes', None)
-        
-        # Đếm số text tokens (loại bỏ image tokens)
-        # Giả sử image token IDs nằm trong khoảng [151643, 151656]
-        num_text_qry_tokens = ((teacher_qry_input['input_ids'] < 151643) | (teacher_qry_input['input_ids'] > 151656)).sum(dim=1)
-        num_text_pos_tokens = ((teacher_pos_input['input_ids'] < 151643) | (teacher_pos_input['input_ids'] > 151656)).sum(dim=1)
-        
         batch_size = student_qry_input['input_ids'].size(0)
         device = student_qry_input['input_ids'].device
-        
-        # Forward teacher
-        with profiling.section("teacher_fwd"), torch.no_grad():
-            teacher_model.eval()
-            teacher_qry_output = teacher_model.encode_input(teacher_qry_input)
-            teacher_pos_output = teacher_model.encode_input(teacher_pos_input)
-            teacher_qry_reps, teacher_qry_image_features, teacher_qry_attention, teacher_qry_hidden_states = teacher_qry_output
-            teacher_pos_reps, teacher_pos_image_features, teacher_pos_attention, teacher_pos_hidden_states = teacher_pos_output
-            
+
         # Forward student
         with profiling.section("student_fwd"):
             student_qry_output = student_model.encode_input(student_qry_input)
@@ -758,6 +746,38 @@ class SpanProposeCriterionWeighted(nn.Module):
         target = torch.arange(scores.size(0), device=scores.device, dtype=torch.long)
         target = target * (all_student_qry_reps.size(0) // all_student_pos_reps.size(0))
         contrastive_loss = nn.CrossEntropyLoss()(scores / self.distiller.temperature, target)
+
+        if self.contrastive_only:
+            zero = contrastive_loss.new_zeros(())
+            total_loss = contrastive_loss + projector_touch(projectors, contrastive_loss)
+            return {
+                'loss': total_loss,
+                'contrastive_loss': contrastive_loss,
+                'text_span_loss': zero,
+                'vision_cluster_loss': zero,
+                'cross_modal_loss': zero,
+                'span_loss': zero,
+                'kd_loss_rkd': zero,
+            }
+
+        teacher_qry_input = input_data['teacher_inputs']['qry']
+        teacher_pos_input = input_data['teacher_inputs']['pos']
+
+        qry_image_sizes = input_data.get('qry_image_sizes', None)  # List of (W, H) cho mỗi sample
+        pos_image_sizes = input_data.get('pos_image_sizes', None)
+
+        # Đếm số text tokens (loại bỏ image tokens)
+        # Giả sử image token IDs nằm trong khoảng [151643, 151656]
+        num_text_qry_tokens = ((teacher_qry_input['input_ids'] < 151643) | (teacher_qry_input['input_ids'] > 151656)).sum(dim=1)
+        num_text_pos_tokens = ((teacher_pos_input['input_ids'] < 151643) | (teacher_pos_input['input_ids'] > 151656)).sum(dim=1)
+
+        # Forward teacher
+        with profiling.section("teacher_fwd"), torch.no_grad():
+            teacher_model.eval()
+            teacher_qry_output = teacher_model.encode_input(teacher_qry_input)
+            teacher_pos_output = teacher_model.encode_input(teacher_pos_input)
+            teacher_qry_reps, teacher_qry_image_features, teacher_qry_attention, teacher_qry_hidden_states = teacher_qry_output
+            teacher_pos_reps, teacher_pos_image_features, teacher_pos_attention, teacher_pos_hidden_states = teacher_pos_output
         
         # ============ Prepare span offsets ============
         input_qry_texts = tokenizer.batch_decode(teacher_qry_input['input_ids'], skip_special_tokens=True)

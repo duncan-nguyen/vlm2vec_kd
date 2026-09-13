@@ -146,7 +146,16 @@ def registry_checks():
 
 
 def base_criterion_checks():
-    from src.criterions.base import DistillCriterion
+    from src.criterions.base import DistillCriterion, scale_gradient_for_ddp
+
+    x = torch.tensor(3.0, requires_grad=True)
+    y = scale_gradient_for_ddp(x, world_size=8)
+    check("DDP gradient scaling is forward-identical", float(y) == 3.0)
+    y.backward()
+    check(
+        "DDP gradient scaling multiplies only backward by world size",
+        float(x.grad) == 8.0,
+    )
 
     class Simple(DistillCriterion):
         def kd_loss(self, ctx):

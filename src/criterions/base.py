@@ -41,6 +41,34 @@ def is_distributed():
     return dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
 
 
+class _ScaleGradient(torch.autograd.Function):
+    """Identity in forward, multiply the incoming gradient in backward."""
+
+    @staticmethod
+    def forward(ctx, tensor, factor):
+        ctx.factor = factor
+        return tensor
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output * ctx.factor, None
+
+
+def scale_gradient_for_ddp(tensor, world_size):
+    """Undo DDP's averaging for a local slice used in a global loss.
+
+    A gathered contrastive loss is identical on every rank, while only the
+    local slice of the gathered tensor is differentiable. DDP averages those
+    disjoint local gradients, so the student update is too small by ``1/W``.
+    Scaling this path -- rather than the whole loss -- fixes the student
+    gradient without over-scaling rank-local terms or criterion parameters.
+    """
+    world_size = int(world_size)
+    if world_size <= 1 or not tensor.requires_grad:
+        return tensor
+    return _ScaleGradient.apply(tensor, world_size)
+
+
 def gather_with_grad(x):
     """All-gather that keeps this rank's slice differentiable.
 
@@ -50,7 +78,9 @@ def gather_with_grad(x):
     """
     if not is_distributed():
         return x
-    return dist_utils.dist_gather(x.contiguous())
+    world_size = dist.get_world_size()
+    local = scale_gradient_for_ddp(x.contiguous(), world_size)
+    return dist_utils.dist_gather(local)
 
 
 def gather_no_grad(x):

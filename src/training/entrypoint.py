@@ -216,6 +216,10 @@ def run_training(autocast_dtype=None):
         model_args=model_args,
         data_args=data_args,
         training_args=training_args,
+        include_teacher=not (
+            training_args.hierd_contrastive_only
+            or model_args.teacher_embedding_cache is not None
+        ),
     )
     dataloader = build_train_dataloader(train_dataset, collator, training_args)
 

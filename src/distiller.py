@@ -121,7 +121,19 @@ class Distiller(nn.Module):
         # Nothing reads the teacher's weights when its embeddings are cached, so
         # they are not loaded at all -- that is several GB of device memory the
         # batch can use instead.
-        self.teacher = None if self.teacher_cache is not None else self._load_teacher()
+        self.hierd_contrastive_only = bool(
+            getattr(training_args, "hierd_contrastive_only", False)
+        )
+        if self.hierd_contrastive_only and training_args.kd_loss_type != "span_propose_attn":
+            raise ValueError(
+                "--hierd_contrastive_only is only valid with "
+                "--kd_loss_type span_propose_attn"
+            )
+        self.teacher = (
+            None
+            if self.teacher_cache is not None or self.hierd_contrastive_only
+            else self._load_teacher()
+        )
         self._configure_attention()
         self.student_hidden_dim = self.model_args.student_hidden_dim
         self.teacher_hidden_dim = self.model_args.teacher_hidden_dim
@@ -247,7 +259,10 @@ class Distiller(nn.Module):
         from src.criterions import attention_needs
 
         kd_loss_type = getattr(self.training_args, "kd_loss_type", None)
-        student_needs, teacher_needs = attention_needs(kd_loss_type)
+        if self.hierd_contrastive_only:
+            student_needs, teacher_needs = False, False
+        else:
+            student_needs, teacher_needs = attention_needs(kd_loss_type)
         print_master(
             f"Criterion '{kd_loss_type}' attention needs: "
             f"student={student_needs}, teacher={teacher_needs}"
@@ -265,7 +280,10 @@ class Distiller(nn.Module):
         return processor
 
     def get_teacher_processor(self):
-        if self.teacher_cache is not None:
+        if self.teacher_cache is not None or self.hierd_contrastive_only:
+            if self.hierd_contrastive_only:
+                print_master("HieRD contrastive-only mode; no teacher processor needed.")
+                return None
             print_master("Teacher embeddings are cached; no teacher processor needed.")
             return None
         model_args = self._create_model_args("teacher")

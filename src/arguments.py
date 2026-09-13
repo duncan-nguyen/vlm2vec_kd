@@ -311,6 +311,12 @@ class TrainingArguments(TrainingArguments):
     w_cross_modal_loss: float = field(
         default=1.0, metadata={"help": "weight for cross modal loss"}
     )
+    hierd_contrastive_only: bool = field(
+        default=False,
+        metadata={
+            "help": "HieRD ablation: optimize only the globally gathered in-batch contrastive loss and skip all teacher/span/RKD computation"
+        },
+    )
     min_samples_dbscan_teacher: int = field(
         default=2,
         metadata={
