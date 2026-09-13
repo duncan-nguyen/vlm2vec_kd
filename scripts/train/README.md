@@ -6,7 +6,9 @@ One launcher per cell of `method × student × task`:
 scripts/train/<method>/<student>_<task>.sh
 ```
 
-`<student>` is `fastvlm` or `llava_onevision`, `<task>` is `cls` or `vqa`. Every
+`<student>` is `fastvlm` or `llava_onevision`, `<task>` is `cls` or `vqa` for
+every method, and also `ret` or `grounding` for `ours` and `rkd` (subsets and
+protocol: [../../docs/datasets.md](../../docs/datasets.md)). Every
 launcher is run **from the repo root** and forwards anything after the script
 name to the trainer, so a smoke test is one flag away:
 
@@ -159,15 +161,19 @@ TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls bash scripts/train/rkd/fastvlm_cls.s
 The cache is fingerprinted against the teacher settings, the subset list, the
 image settings and `percent_data`, and is *refused* rather than silently misused
 under a configuration it was not built for. Since `--image_resolution` differs
-per student and the subset list per task, the four cache-capable cells each need
-their own cache directory:
+per student and the subset list per task, every cache-capable cell needs its own
+cache directory:
 
 | cache | built with |
 | --- | --- |
 | `cache/b3_qwen2_2b_fastvlm_cls` | `TASK=cls STUDENT=fastvlm` (448) |
 | `cache/b3_qwen2_2b_fastvlm_vqa` | `TASK=vqa STUDENT=fastvlm` (448) |
+| `cache/b3_qwen2_2b_fastvlm_ret` | `TASK=ret STUDENT=fastvlm` (448) |
+| `cache/b3_qwen2_2b_fastvlm_grounding` | `TASK=grounding STUDENT=fastvlm` (448) |
 | `cache/b3_qwen2_2b_llava_onevision_cls` | `TASK=cls STUDENT=llava_onevision` (336) |
 | `cache/b3_qwen2_2b_llava_onevision_vqa` | `TASK=vqa STUDENT=llava_onevision` (336) |
+| `cache/b3_qwen2_2b_llava_onevision_ret` | `TASK=ret STUDENT=llava_onevision` (336) |
+| `cache/b3_qwen2_2b_llava_onevision_grounding` | `TASK=grounding STUDENT=llava_onevision` (336) |
 
 One cache then serves every cache-capable method, Ours variant and seed at that
 cell. Criteria that need the teacher's hidden states are refused, not served

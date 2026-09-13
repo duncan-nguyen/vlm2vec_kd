@@ -65,6 +65,10 @@ The same interface is available for:
 - `fastvlm_vqa.sh`
 - `llava_onevision_cls.sh`
 - `llava_onevision_vqa.sh`
+- `fastvlm_ret.sh`, `llava_onevision_ret.sh` (retrieval; about 3.2× the data of CLS)
+- `fastvlm_grounding.sh`, `llava_onevision_grounding.sh` (visual grounding)
+
+Retrieval and grounding use the same configuration; their subsets and eval groups are in [docs/datasets.md](../../../docs/datasets.md). Build their caches with `TASK=ret` or `TASK=grounding`.
 
 | `VARIANT` | purpose |
 | --- | --- |

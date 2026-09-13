@@ -430,9 +430,9 @@ class TrainingArguments(TrainingArguments):
         },
     )
     eval_benchmarks: list[str] = field(
-        default_factory=lambda: ["all"],
+        default_factory=lambda: ["auto"],
         metadata={
-            "help": "which benchmark groups --eval_after_train runs: cls_ind, vqa_ind, cls_ood, vqa_ood, the aliases all/ind/ood/cls/vqa, or bare MMEB-eval subset names. See src/evaluation/benchmarks.py"
+            "help": "which benchmark groups --eval_after_train runs: auto (the IND and OOD groups of the task the run trained on; the default), the groups cls_ind, vqa_ind, cls_ood, vqa_ood, ret_ind, ret_ood, gd_ind, gd_ood, the aliases all/ind/ood/cls/vqa/ret/gd, or bare MMEB-eval subset names. See src/evaluation/benchmarks.py"
         },
     )
     eval_dataset_split: str = field(

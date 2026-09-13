@@ -76,10 +76,8 @@ IOD training total: about 188K.
 IOD training total: about 595K, roughly 3.2× CLS.
 
 - **Names.** Train and eval subset names are identical.
-- **Pipeline support.**
-  - The IOD list equals the `ret` preset in `scripts/data/download_mmeb.py`.
-  - RET is not yet wired into `src/evaluation/benchmarks.py`, which rejects subset names outside its groups.
-  - It is also not in `scripts/data/precompute_teacher_embeddings.sh`, which accepts only `TASK=cls|vqa`.
+- **Pipeline support.** See [Training and evaluation protocol](#training-and-evaluation-protocol). The IOD list equals the `ret` preset in `scripts/data/download_mmeb.py`.
+- **Image token.** WebQA (train and eval) and EDIS (eval) put `<|image_1|>` in text-only queries. Training strips it for WebQA; evaluation strips it from any query without an image, for every backbone (`strip_orphan_image_token` in `src/evaluation/eval_utils.py`).
 - **OOD coverage.**
   - FashionIQ shares CIRR's composed-retrieval form; EDIS shares WebQA's T → I+T form.
   - OVEN (I+T → I+T) and Wiki-SS-NQ (document images) have no IOD counterpart.
@@ -104,13 +102,26 @@ IOD training total: about 100K, from a single task.
   - `RefCOCO`: select the region matching a referring expression. Candidates are crops from different images.
   - `RefCOCO-Matching`: each candidate is an image paired with a referring expression. Some negatives come from **the same image** with a different expression, so it is the hardest of the four.
 - **Name clash.** The grounding subset `MSCOCO` is a different dataset from the retrieval subsets `MSCOCO_i2t` and `MSCOCO_t2i`, although all three share the MSCOCO images.
-- **Pipeline support.**
-  - The `grounding` preset in `scripts/data/download_mmeb.py` downloads `MSCOCO`.
-  - Grounding is not yet wired into `src/evaluation/benchmarks.py` or `scripts/data/precompute_teacher_embeddings.sh`.
+- **Pipeline support.** See [Training and evaluation protocol](#training-and-evaluation-protocol). The `grounding` preset in `scripts/data/download_mmeb.py` downloads `MSCOCO`.
 - **Sampler.** With a single training task, the task-homogeneous sampler has no effect.
 - **Published reference** (HieRD Table 14; FastVLM-0.5B student only, single run, batch 16):
   - The B3-Qwen2-2B teacher scores below SFT on `MSCOCO` (70.5 vs 71.9) and on `Visual7W-Pointing` (74.7 vs 82.1).
   - All distillation methods land within about 1 point of SFT on average.
+
+## Training and evaluation protocol
+
+All four tasks share one training configuration: HieRD Table 6 per student (Table 7 for EM-KD), 1 epoch over the full IOD training set (`--percent_data 1.0`), no subsampling. HieRD reports grounding under "the same distillation setup as in the main experiments".
+
+| Task | Train subsets | Launchers | Teacher cache | Eval groups | Eval scripts |
+| --- | --- | --- | --- | --- | --- |
+| CLS | 5 CLS IOD | `<method>/<student>_cls.sh` (every method) | `TASK=cls` | `cls_ind`, `cls_ood` | `scripts/eval/cls.sh`, `cls_ood.sh` |
+| VQA | 6 VQA IOD | `<method>/<student>_vqa.sh` (every method) | `TASK=vqa` | `vqa_ind`, `vqa_ood` | `scripts/eval/vqa.sh`, `vqa_ood.sh` |
+| RET | 8 RET IOD | `ours/`, `rkd/` `<student>_ret.sh` | `TASK=ret` | `ret_ind`, `ret_ood` | `scripts/eval/ret.sh`, `ret_ood.sh` |
+| GD | `MSCOCO` | `ours/`, `rkd/` `<student>_grounding.sh` | `TASK=grounding` | `gd_ind`, `gd_ood` | `scripts/eval/gd.sh`, `gd_ood.sh` |
+
+- **Post-training evaluation.** `--eval_benchmarks` defaults to `auto`: a run evaluates the IND and OOD groups of the task(s) its `--subset_name` belongs to. That is 10 subsets for CLS, 10 for VQA, 12 for RET and 4 for GD. Pass `all` for every group.
+- **Offline evaluation.** Run one wrapper per group, or several in a row with `EVAL_GROUPS="ret ret_ood" bash scripts/eval/all.sh <checkpoint>`. `tools/summarize_mmeb.py` reports every group that has a score.
+- **Consistency check.** `python tools/misc/test_training_stack.py` checks that each task's subset list agrees across the launchers, the cache script, the download preset and `TRAIN_TASKS`, in the order the cache is keyed by.
 
 ## Where these names live in code
 
@@ -118,5 +129,6 @@ IOD training total: about 100K, from a single task.
 | --- | --- |
 | Training subsets per launcher | `scripts/train/<method>/<student>_<task>.sh`, `--subset_name` |
 | Download presets (`cls`, `vqa`, `ret`, `grounding`) | `scripts/data/download_mmeb.py` |
-| Eval groups and paper column labels | `src/evaluation/benchmarks.py` (`CLS_IND`, `VQA_IND`, `CLS_OOD`, `VQA_OOD`) |
+| Eval groups and paper column labels | `src/evaluation/benchmarks.py` (`CLS_IND`, `VQA_IND`, `CLS_OOD`, `VQA_OOD`, `RET_IND`, `RET_OOD`, `GD_IND`, `GD_OOD`) |
+| Train subsets per task, task → eval groups | `src/evaluation/benchmarks.py` (`TRAIN_TASKS`, `TASK_GROUPS`) |
 | Teacher cache subset lists | `scripts/data/precompute_teacher_embeddings.sh` |

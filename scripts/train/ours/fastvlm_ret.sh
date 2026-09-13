@@ -1,0 +1,125 @@
+#!/bin/bash
+# Ours -- FastVLM-0.5B, RET
+# Ours: distil correspondence-aware multiscale connectivity of the
+# query-candidate relation rather than an identity-agnostic persistence barcode.
+#
+# Method:  kd_loss_type ours
+# Teacher: raghavlite/B3_Qwen2_2B (qwen2_vl)  ->  student FastVLM-0.5B (llava_qwen2)
+# Config:  paper Table 6 for this student, as for CLS/VQA; see
+#          scripts/train/ours/README.md, docs/ours/ours_implementation.md and,
+#          for the subsets and their IND/OOD split, docs/datasets.md.
+#
+# Retrieval trains on the 8 IND subsets, about 595K rows -- roughly 3.2x a CLS
+# run. Most candidates are images (t2i, i2i, composed), so the student encodes
+# images on both sides of the pair and a step needs more memory than CLS. If the
+# per-device batch has to shrink, add GPUs rather than accumulate gradients: the
+# topology is built on the gathered micro-batch, and every row compared in a
+# table must use the same global batch.
+#
+# One script, three rows: the method, its no-teacher control and its
+# L_topo-only ablation.
+# Pick one with VARIANT and vary SEED:
+#
+#   VARIANT=ours SEED=42 bash scripts/train/ours/fastvlm_ret.sh
+#   for v in ours student_only; do
+#     for s in 42 43 44; do VARIANT=$v SEED=$s bash scripts/train/ours/fastvlm_ret.sh; done
+#   done
+
+set -euo pipefail
+
+NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-1}"
+TRAIN_SCRIPT="tools/train_distill_no_deepspeed.py"
+
+# Nơi chứa ảnh MMEB-train. Ghi đè mà không cần sửa file:
+#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/ours/fastvlm_ret.sh
+MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
+SEED="${SEED:-42}"
+BATCH_SIZE="${BATCH_SIZE:-16}"
+
+# This criterion reads nothing from the teacher but its final embedding, so it
+# can train against a precomputed cache and skip the teacher forward, the
+# teacher's image preprocessing and its weights in GPU memory entirely:
+#
+#   TASK=ret STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_ret \
+#     bash scripts/data/precompute_teacher_embeddings.sh
+#   TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_ret bash scripts/train/ours/fastvlm_ret.sh
+#
+# The cache is fingerprinted against the teacher, the subset list and the image
+# settings, so this cell needs its own -- leave TEACHER_CACHE unset to run the
+# teacher live.
+TEACHER_CACHE="${TEACHER_CACHE:-}"
+CACHE_FLAGS=()
+if [ -n "$TEACHER_CACHE" ]; then
+  CACHE_FLAGS=(--teacher_embedding_cache "$TEACHER_CACHE")
+fi
+
+VARIANT="${VARIANT:-ours}"
+
+# lambda_topo. Tune once on development data, then freeze across tasks/seeds.
+OURS_WEIGHT="${OURS_WEIGHT:-1.0}"
+
+# Each variant is one row of the experiment plan. Only the KD-side flags differ.
+# Ours compares distances, never embeddings, so it needs no teacher/student
+# projector -- declaring one without using it makes DDP abort on multi-GPU.
+case "$VARIANT" in
+  ours)          # the method
+    KD_FLAGS=(--ours_weight "$OURS_WEIGHT") ;;
+  student_only)     # the no-teacher control, same sampler and batch construction
+    KD_FLAGS=(--ours_weight 0.0) ;;
+  topo_only)        # L_topo alone: the retrieval loss is dropped, lambda unchanged
+    KD_FLAGS=(--ours_weight "$OURS_WEIGHT" --ours_retrieval_loss False) ;;
+  *)
+    echo "unknown VARIANT '$VARIANT'; expected: ours student_only topo_only" >&2
+    exit 1 ;;
+esac
+
+OUTPUT_DIR="${OUTPUT_DIR:-training/ours/fastvlm_ret/${VARIANT}_seed${SEED}}"
+echo "variant=$VARIANT seed=$SEED topology_batch=$((BATCH_SIZE * NUM_GPUS_PER_NODE)) -> $OUTPUT_DIR"
+
+torchrun --standalone \
+    --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
+    --dataloader_num_workers 8 \
+    --model_name "apple/FastVLM-0.5B" \
+    --teacher_model_name "raghavlite/B3_Qwen2_2B" \
+    --lora True \
+    --teacher_lora True \
+    --lora_r 64 \
+    --lora_alpha 64 \
+    --teacher_lora_r 8 \
+    --teacher_pooling "eos" \
+    --teacher_backbone "qwen2_vl" \
+    --model_backbone "llava_qwen2" \
+    --pooling "eos" \
+    --dataset_name "TIGER-Lab/MMEB-train" \
+    --subset_name "VisDial" "CIRR" "VisualNews_t2i" "VisualNews_i2t" "MSCOCO_t2i" "MSCOCO_i2t" "NIGHTS" "WebQA" \
+    --dataset_split "original" \
+    --percent_data 1.0 \
+    --image_dir "$MMEB_TRAIN_DIR" \
+    --output_dir "$OUTPUT_DIR" \
+    --per_device_train_batch_size "$BATCH_SIZE" \
+    --gradient_accumulation_steps 1 \
+    --learning_rate 1e-4 \
+    --num_train_epochs 1 \
+    --bf16 \
+    --save_total_limit 5 \
+    --logging_steps 1 \
+    --save_strategy "epoch" \
+    --seed "$SEED" \
+    --weight_decay 0.01 \
+    --normalize True \
+    --teacher_normalize True \
+    --lr_scheduler_type "cosine" \
+    --warmup_ratio 0.03 \
+    --kd_loss_type "ours" \
+    --image_resolution "448" \
+    --projector_lr 5e-4 \
+    "${CACHE_FLAGS[@]+"${CACHE_FLAGS[@]}"}" \
+    "${KD_FLAGS[@]}" \
+    "$@"
+# Anything after the script name is forwarded to the trainer and, because these
+# are argparse options, a repeat overrides what is set above. Handy for a smoke
+# test:  bash scripts/train/ours/fastvlm_ret.sh --percent_data 0.01 \
+#            --push_to_hub False --eval_after_train False
+# Those last two matter: a finished run uploads itself and evaluates by
+# default, and a 1% run is not a result worth collecting. The evaluation picks
+# the ret_ind and ret_ood groups on its own (--eval_benchmarks auto).

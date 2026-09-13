@@ -1,12 +1,12 @@
 #!/bin/bash
-# MMEB evaluation on one benchmark group of Table 1, Precision@1.
+# MMEB evaluation on one benchmark group of the results tables, Precision@1.
 #
 #   bash scripts/eval/run_group.sh <group> <checkpoint-dir>
 #
-# <group> is cls_ind, vqa_ind, cls_ood, vqa_ood, or any alias
-# src/evaluation/benchmarks.py accepts (all, ind, ood, cls, vqa) -- the subset
-# list is read from there, so the scripts and the post-training eval cannot
-# drift apart on which benchmarks a column contains.
+# <group> is cls_ind, vqa_ind, cls_ood, vqa_ood, ret_ind, ret_ood, gd_ind,
+# gd_ood, or any alias src/evaluation/benchmarks.py accepts (all, ind, ood, cls,
+# vqa, ret, gd) -- the subset list is read from there, so the scripts and the
+# post-training eval cannot drift apart on which benchmarks a column contains.
 #
 # The image resolution MUST match what the checkpoint was trained at; otherwise
 # the encoder sees different preprocessing than it was distilled with. Paper

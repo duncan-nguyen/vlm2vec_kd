@@ -7,6 +7,11 @@
 #   TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls bash scripts/data/precompute_teacher_embeddings.sh
 #   TASK=vqa STUDENT=llava_onevision TEACHER_CACHE=cache/b3_qwen2_2b_llava_onevision_vqa \
 #     bash scripts/data/precompute_teacher_embeddings.sh
+#   TASK=ret STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_ret \
+#     bash scripts/data/precompute_teacher_embeddings.sh
+#
+# TASK is cls, vqa, ret or grounding; the subset lists are the ones the
+# scripts/train/<method>/<student>_<task>.sh launchers pass, in the same order.
 #
 # The teacher and data settings below are written into the cache's meta.json and
 # re-checked at training time, so a cache built for another subset list or image
@@ -33,7 +38,9 @@ TASK="${TASK:-cls}"
 case "$TASK" in
   cls) SUBSETS=("ImageNet_1K" "N24News" "HatefulMemes" "VOC2007" "SUN397") ;;
   vqa) SUBSETS=("OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W") ;;
-  *)   echo "unknown TASK '$TASK'; expected cls or vqa" >&2; exit 1 ;;
+  ret) SUBSETS=("VisDial" "CIRR" "VisualNews_t2i" "VisualNews_i2t" "MSCOCO_t2i" "MSCOCO_i2t" "NIGHTS" "WebQA") ;;
+  grounding) SUBSETS=("MSCOCO") ;;
+  *)   echo "unknown TASK '$TASK'; expected cls, vqa, ret or grounding" >&2; exit 1 ;;
 esac
 
 # Which student the cache is for. It is not loaded; it only fixes the image

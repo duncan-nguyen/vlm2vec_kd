@@ -3,6 +3,27 @@ import os
 
 import numpy as np
 
+#: The image placeholder MMEB writes into its instructions (Phi-3-V's token).
+MMEB_IMAGE_TOKEN = "<|image_1|>"
+
+
+def strip_orphan_image_token(row, text_field="qry_text", img_path_field="qry_img_path"):
+    """Drop the image placeholder from a row that has no image.
+
+    WebQA and EDIS write `<|image_1|>` into every query although the query is
+    text only. Left in, the student's processor is asked to fill an image slot
+    with no image. Training already strips it from WebQA for every backbone
+    (`src/distiller.py`); evaluation used to do so only for `llava_qwen2`, so
+    any other student was scored on inputs it was never trained on. A row that
+    does have an image is returned unchanged.
+
+    For `datasets.Dataset.map`; returns only the rewritten field.
+    """
+    text = row[text_field]
+    if row[img_path_field] or not text or MMEB_IMAGE_TOKEN not in text:
+        return {text_field: text}
+    return {text_field: text.replace(MMEB_IMAGE_TOKEN, "").strip()}
+
 
 def get_pred(qry_t, tgt_t, normalization=False):
     """

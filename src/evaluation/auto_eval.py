@@ -140,7 +140,8 @@ def run_post_training_eval(model_args, data_args, training_args):
         training_args.output_dir, "checkpoint-final"
     )
     subsets = resolve_groups(
-        data_args.eval_subset_name or training_args.eval_benchmarks
+        data_args.eval_subset_name or training_args.eval_benchmarks,
+        train_subsets=data_args.subset_name,
     )
     out_dir = training_args.eval_output_dir or os.path.join(checkpoint, "mmeb_eval")
 

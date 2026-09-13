@@ -64,6 +64,13 @@ COMMON = dict(percent_data="1.0")
 
 CLS = ["ImageNet_1K", "N24News", "HatefulMemes", "VOC2007", "SUN397"]
 VQA = ["OK-VQA", "A-OKVQA", "DocVQA", "InfographicsVQA", "ChartQA", "Visual7W"]
+# Retrieval and grounding are not in the HieRD paper's main tables. Their
+# launchers use the same Table 6/7 configuration (HieRD reports grounding under
+# "the same distillation setup"), so they are held to the same checks.
+RET = ["VisDial", "CIRR", "VisualNews_t2i", "VisualNews_i2t",
+       "MSCOCO_t2i", "MSCOCO_i2t", "NIGHTS", "WebQA"]
+GROUNDING = ["MSCOCO"]
+TASKS = {"CLS": CLS, "VQA": VQA, "RET": RET, "GROUNDING": GROUNDING}
 
 
 def flag(src, name):
@@ -90,11 +97,11 @@ def check(path):
 
     # the task is implied by the directory-independent subset list
     subs = (flag(src, "subset_name") or "").split()
-    task = "CLS" if set(subs) == set(CLS) else "VQA" if set(subs) == set(VQA) else None
+    task = next((name for name, names in TASKS.items() if set(subs) == set(names)), None)
 
     problems = []
     if task is None:
-        problems.append(f"subset_name is neither the CLS nor the VQA list: {subs}")
+        problems.append(f"subset_name is not one of the {'/'.join(TASKS)} lists: {subs}")
     for k, want in sorted(expected.items()):
         got = flag(src, k)
         if got != want:

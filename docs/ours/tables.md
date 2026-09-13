@@ -61,11 +61,11 @@ There are no published numbers for this setting, so every row is a rerun.
 
 | Method | Seeds | Runs (`F` / `+L`) | Status |
 | --- | --- | --- | --- |
-| `student_only` | 3 | 3 / +3 | needs C5 |
-| RKD | 3 | 3 / +3 | needs C1, C5 |
-| Row-wise KL | 3 | 3 / +3 | needs C1, C2, C5 |
-| HieRD (optional) | 3 | 3 | needs C1, C5 |
-| **Ours** | 3 | 3 / +3 | needs C5 |
+| `student_only` | 3 | 3 / +3 | ready (`ours/<student>_ret.sh`) |
+| RKD | 3 | 3 / +3 | needs C1 (`rkd/<student>_ret.sh` exists) |
+| Row-wise KL | 3 | 3 / +3 | needs C1, C2, plus its RET launcher |
+| HieRD (optional) | 3 | 3 | needs C1 and a RET launcher; untested on text-only queries |
+| **Ours** | 3 | 3 / +3 | ready (`ours/<student>_ret.sh`) |
 
 IOD RET is about 595K training samples, 3.2× CLS. If it is subsampled, use one per-subset cap for every method and for the teacher cache.
 
@@ -168,7 +168,7 @@ Needs C6.
 | A5 | Recall@3 and MRR for T1–T3 (HieRD reports them) | — | 0 | needs C7; eval currently computes only `acc` |
 | A6 | Per-dataset results for T4 and T5 | — | 0 | — |
 | A7 | Training dynamics: `topo_loss` floor and MST-edge recall over steps | — | 0 | logs |
-| A8 | Grounding (IOD `MSCOCO`; OOD `Visual7W-Pointing`, `RefCOCO`, `RefCOCO-Matching`): `student_only`, RKD, row-wise KL, Ours | `F-GD`, 1–3 seeds | 4–12 | needs C1, C2, C5 |
+| A8 | Grounding (IOD `MSCOCO`; OOD `Visual7W-Pointing`, `RefCOCO`, `RefCOCO-Matching`): `student_only`, RKD, row-wise KL, Ours | `F-GD`, 1–3 seeds | 4–12 | Ours and `student_only` ready; RKD needs C1; row-wise KL needs C1, C2 |
 | A9 | Capacity gap with B3-Qwen2-7B teacher: `student_only`, RKD, row-wise KL, Ours | `F-CLS`, 1–3 seeds | 4–12 | needs C1, C2, a 7B teacher cache |
 
 A8 is low priority. HieRD Table 14 shows the B3-Qwen2-2B teacher below SFT on `MSCOCO` and `Visual7W-Pointing`.
@@ -181,7 +181,7 @@ A8 is low priority. HieRD Table 14 shows the B3-Qwen2-2B teacher below SFT on `M
 | C2 | Bidirectional row-wise KL criterion that accepts `--teacher_embedding_cache` | T1–T3, A8, A9 |
 | C3 | `--ours_target {merge, distance, barcode, truncated, rank, mst_edge}` | T4 |
 | C4 | `--ours_filtration {bipartite, union, per_modality}` and `--ours_merge_block within` | T5 |
-| C5 | RET / GD wiring: per-method launchers, `TASK=ret\|grounding` in `precompute_teacher_embeddings.sh`, eval groups in `src/evaluation/benchmarks.py`, `tools/check_paper_settings.py` | T3, A8 |
+| C5 | **Done** for Ours and RKD: launchers, `TASK=ret\|grounding` cache, `ret_*` / `gd_*` eval groups with `--eval_benchmarks auto`, checker. Remaining: row-wise KL and HieRD launchers. Protocol: [../datasets.md](../datasets.md#training-and-evaluation-protocol) | T3, A8 |
 | C6 | Pearson on distances in `neighborhood_preservation`, a structure-vs-accuracy aggregation script, the toy script | A1, F1 |
 | C7 | Recall@k and MRR in `tools/eval_mmeb.py` | A5 |
 

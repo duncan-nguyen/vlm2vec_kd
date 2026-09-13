@@ -616,9 +616,119 @@ def span_common_checks():
     )
 
 
+def benchmark_checks():
+    """Benchmark groups, `auto` eval selection, and the task subset lists.
+
+    The subset lists live in four places -- the launchers, the teacher-cache
+    script, the download presets and `TRAIN_TASKS` -- and a cache is keyed by
+    the list *in order*, so a launcher and its cache disagreeing on order would
+    be refused at training time rather than caught here. These checks catch it
+    here.
+    """
+    import re
+
+    from src.evaluation import benchmarks as bm
+    from src.evaluation.eval_utils import strip_orphan_image_token
+    from src.evaluation.summary import build_summary
+
+    ret_eval = list(bm.RET_IND.values()) + list(bm.RET_OOD.values())
+    gd_eval = list(bm.GD_IND.values()) + list(bm.GD_OOD.values())
+    cls_eval = list(bm.CLS_IND.values()) + list(bm.CLS_OOD.values())
+
+    check("no subset belongs to two groups", len(bm.ALL_SUBSETS) == len(set(bm.ALL_SUBSETS)))
+    check(
+        "CLS/VQA group contents are unchanged",
+        bm.resolve_groups(["cls_ind"]) == ["ImageNet-1K", "N24News", "HatefulMemes", "VOC2007", "SUN397"]
+        and len(bm.resolve_groups(["vqa_ind", "vqa_ood"])) == 10,
+    )
+    check("RET has 8 IND and 4 OOD subsets", (len(bm.RET_IND), len(bm.RET_OOD)) == (8, 4))
+    check("GD has 1 IND and 3 OOD subsets", (len(bm.GD_IND), len(bm.GD_OOD)) == (1, 3))
+
+    ret_train = ["VisDial", "CIRR", "VisualNews_t2i", "VisualNews_i2t",
+                 "MSCOCO_t2i", "MSCOCO_i2t", "NIGHTS", "WebQA"]
+    check("auto on a RET run evaluates RET IND+OOD", bm.resolve_groups(["auto"], ret_train) == ret_eval)
+    check("auto on a grounding run evaluates GD IND+OOD", bm.resolve_groups(["auto"], ["MSCOCO"]) == gd_eval)
+    check(
+        "auto on a CLS run evaluates only CLS",
+        bm.resolve_groups(["auto"], ["ImageNet_1K", "SUN397"]) == cls_eval,
+    )
+    check("no names means auto", bm.resolve_groups(None, ["MSCOCO"]) == gd_eval)
+    check(
+        "auto on an unrecognised run falls back to every group",
+        bm.resolve_groups(["auto"], ["NotASubset"]) == bm.ALL_SUBSETS
+        and bm.resolve_groups(["auto"]) == bm.ALL_SUBSETS,
+    )
+    check(
+        "a mixed run is evaluated on each task it trained on",
+        bm.resolve_groups(["auto"], ["MSCOCO", "WebQA"]) == ret_eval + gd_eval,
+    )
+    check(
+        "ind/ood aliases cover every task",
+        "MSCOCO" in bm.resolve_groups(["ind"]) and "OVEN" in bm.resolve_groups(["ood"]),
+    )
+    check(
+        "infer_task tells grounding MSCOCO from retrieval MSCOCO_*",
+        bm.infer_task(["MSCOCO"]) == "grounding"
+        and bm.infer_task(["MSCOCO_i2t"]) == "ret"
+        and bm.infer_task(["MSCOCO", "MSCOCO_i2t"]) == "mixed",
+    )
+
+    summary = build_summary({"OVEN": 0.5, "EDIS": 0.7}, ["OVEN", "EDIS"])
+    check(
+        "a RET-only summary reports only the RET OOD group",
+        list(summary["groups"]) == ["ret_ood"]
+        and summary["groups"]["ret_ood"]["missing"] == ["FashionIQ", "Wiki-SS-NQ"],
+    )
+
+    tok = "<|image_1|>"
+    check(
+        "an orphan image token is stripped from a text-only query",
+        strip_orphan_image_token({"qry_text": f"{tok}\nFind a news image", "qry_img_path": ""})
+        == {"qry_text": "Find a news image"},
+    )
+    check(
+        "a query with an image keeps its token",
+        strip_orphan_image_token({"qry_text": f"{tok}\nCrop", "qry_img_path": "a.jpg"})
+        == {"qry_text": f"{tok}\nCrop"},
+    )
+
+    root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
+    def read(path):
+        with open(_os.path.join(root, path)) as handle:
+            return handle.read()
+
+    def launcher_subsets(path):
+        m = re.search(r'--subset_name\s+((?:"[^"]*"\s*)+)', read(path))
+        return re.findall(r'"([^"]*)"', m.group(1)) if m else None
+
+    precompute = read("scripts/data/precompute_teacher_embeddings.sh")
+    presets = read("scripts/data/download_mmeb.py")
+    for task, preset in (("cls", "cls"), ("vqa", "vqa"), ("ret", "ret"), ("grounding", "grounding")):
+        arm = re.search(rf'^\s*{task}\)\s*SUBSETS=\(([^)]*)\)', precompute, re.M)
+        cache_list = re.findall(r'"([^"]*)"', arm.group(1)) if arm else None
+        preset_m = re.search(rf'"{preset}":\s*\[(.*?)\]', presets, re.S)
+        preset_list = re.findall(r'"([^"]*)"', preset_m.group(1)) if preset_m else None
+        check(
+            f"{task}: cache script, download preset and TRAIN_TASKS name the same subsets",
+            cache_list is not None
+            and set(cache_list) == set(preset_list or []) == bm.TRAIN_TASKS[task],
+        )
+        for method in ("ours", "rkd"):
+            for student in ("fastvlm", "llava_onevision"):
+                path = f"scripts/train/{method}/{student}_{task}.sh"
+                if not _os.path.exists(_os.path.join(root, path)):
+                    continue
+                check(
+                    f"{path} lists its subsets in the cache script's order",
+                    launcher_subsets(path) == cache_list,
+                )
+
+
 def main():
     for name, fn in [
         ("registry", registry_checks),
+        ("benchmarks", benchmark_checks),
         ("criterion base", base_criterion_checks),
         ("span helpers", span_common_checks),
         ("images", image_checks),
