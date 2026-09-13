@@ -197,9 +197,8 @@ Every generated launcher accepts:
 | `NUM_GPUS_PER_NODE` | `1` | `torchrun --nproc_per_node` |
 | `TEACHER_CACHE` | *(unset)* | cache-capable methods only; unset runs the teacher live |
 
-The `cmtop/` launchers add `VARIANT` (`student_only`, `endpoint`, `vsp`,
-`pointcloud_h0`, `cmtop_h0`, `cmtop_h0_h1`), `CMTOP_WEIGHT` and `KD_WEIGHT` —
-see [cmtop/README.md](cmtop/README.md).
+The `cmtop/` launchers add `VARIANT` (`cmmerge`, `student_only`) and
+`CMTOP_WEIGHT` — see [cmtop/README.md](cmtop/README.md).
 
 The `talas/` launchers add `VARIANT` (`talas`, `no_asam`, `sam`, `no_lasd`,
 `no_tamd`), `TALAS_CONTRASTIVE_WEIGHT`, `TAMD_WEIGHT`, `LASD_WEIGHT`,

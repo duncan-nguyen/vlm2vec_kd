@@ -1,13 +1,16 @@
 """Metrics for the CM-Merge evaluation protocol.
 
 Section 4 of ``docs/cross_modal_topological_distillation.md`` asks for two
-things beyond MMEB accuracy: a *topology discrepancy* between the teacher's and
-the student's retrieval relation, and *neighborhood preservation*. A gain that
-does not come with both is not evidence for the claim the paper wants to make.
+things beyond MMEB accuracy: a *structural discrepancy* between the teacher's
+and the student's retrieval relation, and *neighborhood preservation*. A gain
+that does not come with both is not evidence for the claim the paper wants to
+make.
 
-The primary diagnostic is the identity-aligned merge-matrix discrepancy, exactly the
-structural object the main method targets.  Exact diagram distances remain as
-controls (diagonal matches included), alongside full-pool neighborhood fidelity.
+The primary diagnostic is the identity-aligned merge-matrix discrepancy, exactly
+the structural object the method targets. ``teacher_mst_edge_recall`` and the
+component ARI at teacher-distance quantiles read the same hierarchy at coarser
+resolution; :func:`neighborhood_preservation` measures fidelity over the full
+candidate pool.
 """
 
 import numpy as np
@@ -21,10 +24,6 @@ from src.topology import (
     bipartite_merge_matrix,
     bipartite_mst_edges,
     cosine_distance_matrix,
-    h0_deaths,
-    h1_births,
-    point_cloud_h0_diagram,
-    wasserstein2_diagram,
 )
 
 
@@ -32,22 +31,6 @@ def _as_tensor(x):
     if isinstance(x, torch.Tensor):
         return x.detach().float().cpu()
     return torch.as_tensor(np.asarray(x), dtype=torch.float32)
-
-
-def _cross_modal_diagrams(dist_matrix, h1_topk=None):
-    """H0 bars and H1 births of one relation, from a single MST.
-
-    H0 and H1 are the tree and its complement, so they share one MST call.
-    A B x B relation has ~B^2 H1 bars and the exact diagram distance is
-    quadratic in the bar count, so the default keeps the same |Q| + |C|
-    earliest births the training loss uses.
-    """
-    edges = bipartite_mst_edges(dist_matrix)
-    topk = h1_topk if h1_topk else sum(dist_matrix.shape)
-    return (
-        h0_deaths(dist_matrix, edges).numpy(),
-        h1_births(dist_matrix, edges, topk=topk).numpy(),
-    )
 
 
 def _component_labels(dist_matrix, threshold):
@@ -69,23 +52,19 @@ def relation_topology_discrepancy(
     teacher_cand,
     student_qry,
     student_cand,
-    h1_topk=None,
     partition_quantiles=(0.01, 0.05, 0.1, 0.2),
 ):
-    """Identity-aligned merge discrepancy plus barcode controls for one batch.
+    """Identity-aligned merge discrepancy of one batch-sized relation.
 
     Args:
         teacher_qry/teacher_cand/student_qry/student_cand: Embedding arrays.
             Teacher/student rows must be aligned within each side. Query and
             candidate pool sizes may differ.
-        h1_topk: how many earliest H1 births to compare; ``None`` uses
-            ``|Q| + |C|``, matching the ``--cmtop_h1_topk`` training default.
         partition_quantiles: teacher-distance quantiles at which to compare the
             identity-aligned component partitions with adjusted Rand index.
 
     Returns:
-        The merge discrepancy, exact barcode controls, MST-edge recall,
-        component agreement and ordinary point-cloud topology references.
+        The merge discrepancy, MST-edge recall and component agreement.
     """
     t_q, t_c = _as_tensor(teacher_qry), _as_tensor(teacher_cand)
     s_q, s_c = _as_tensor(student_qry), _as_tensor(student_cand)
@@ -105,27 +84,17 @@ def relation_topology_discrepancy(
 
     teacher_merge = bipartite_merge_matrix(teacher_cross)
     student_merge = bipartite_merge_matrix(student_cross)
-    upper = torch.triu(
-        torch.ones_like(teacher_merge, dtype=torch.bool), diagonal=1
-    )
+    upper = torch.triu(torch.ones_like(teacher_merge, dtype=torch.bool), diagonal=1)
 
-    teacher_h0, teacher_h1 = _cross_modal_diagrams(teacher_cross, h1_topk)
-    student_h0, student_h1 = _cross_modal_diagrams(student_cross, h1_topk)
     teacher_edges = bipartite_mst_edges(teacher_cross)
     student_edges = bipartite_mst_edges(student_cross)
     n_c = teacher_cross.size(1)
-    teacher_edge_ids = set(
-        (teacher_edges[0] * n_c + teacher_edges[1]).cpu().tolist()
-    )
-    student_edge_ids = set(
-        (student_edges[0] * n_c + student_edges[1]).cpu().tolist()
-    )
+    teacher_edge_ids = set((teacher_edges[0] * n_c + teacher_edges[1]).cpu().tolist())
+    student_edge_ids = set((student_edges[0] * n_c + student_edges[1]).cpu().tolist())
     out = {
         "cross_modal_merge_l1": float(
             (teacher_merge - student_merge).abs()[upper].mean()
         ),
-        "cross_modal_h0": wasserstein2_diagram(teacher_h0, student_h0),
-        "cross_modal_h1_birth": wasserstein2_diagram(teacher_h1, student_h1),
         "teacher_mst_edge_recall": len(teacher_edge_ids & student_edge_ids)
         / max(len(teacher_edge_ids), 1),
     }
@@ -138,19 +107,6 @@ def relation_topology_discrepancy(
         key = f"component_ari_q{int(round(100 * quantile)):02d}"
         out[key] = float(adjusted_rand_score(teacher_labels, student_labels))
 
-    for name, teacher_points, student_points in (
-        ("query_cloud_h0", t_q, s_q),
-        ("candidate_cloud_h0", t_c, s_c),
-        ("union_cloud_h0", torch.cat([t_q, t_c]), torch.cat([s_q, s_c])),
-    ):
-        out[name] = wasserstein2_diagram(
-            point_cloud_h0_diagram(
-                cosine_distance_matrix(teacher_points, teacher_points)
-            ).numpy(),
-            point_cloud_h0_diagram(
-                cosine_distance_matrix(student_points, student_points)
-            ).numpy(),
-        )
     return out
 
 
@@ -162,7 +118,6 @@ def batched_topology_discrepancy(
     batch_size=64,
     num_batches=50,
     seed=0,
-    h1_topk=None,
     partition_quantiles=(0.01, 0.05, 0.1, 0.2),
 ):
     """Average :func:`relation_topology_discrepancy` over random batches.
@@ -198,7 +153,6 @@ def batched_topology_discrepancy(
                 t_c[c_idx],
                 s_q[q_idx],
                 s_c[c_idx],
-                h1_topk=h1_topk,
                 partition_quantiles=partition_quantiles,
             )
         )

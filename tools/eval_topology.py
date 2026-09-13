@@ -120,7 +120,6 @@ def report(pairs, args):
             batch_size=args.batch_size,
             num_batches=args.num_batches,
             seed=args.seed,
-            h1_topk=args.h1_topk or None,
             partition_quantiles=tuple(args.partition_quantiles),
         ),
         "neighborhood_preservation": neighborhood_preservation(
@@ -161,7 +160,6 @@ def main():
         help="filtration size; match the training batch size",
     )
     parser.add_argument("--num_batches", type=int, default=50)
-    parser.add_argument("--h1_topk", type=int, default=0, help="0 uses every H1 birth")
     parser.add_argument(
         "--partition_quantiles",
         type=float,

@@ -317,55 +317,17 @@ class TrainingArguments(TrainingArguments):
             "help": "min_samples for DBSCAN when clustering teacher features for span loss"
         },
     )
-    # CM-Merge and its structural ablations (kd_loss_type="cmtop")
+    # CM-Merge (kd_loss_type="cmtop"); see docs/cmtop_implementation.md
     cmtop_weight: float = field(
         default=1.0,
         metadata={
-            "help": "lambda_merge: weight of CM-Merge (or of the selected topological ablation). 0 disables topology"
-        },
-    )
-    cmtop_mode: str = field(
-        default="merge",
-        metadata={
-            "help": "structural target, '+'-joined: merge (identity-preserving bipartite merge hierarchy; main), critical_edges, cross_modal (legacy barcode H0/H1), point_cloud, or union"
-        },
-    )
-    cmtop_h0_weight: float = field(
-        default=1.0,
-        metadata={"help": "legacy barcode baseline: weight of its H0 term"},
-    )
-    cmtop_h1_weight: float = field(
-        default=0.0,
-        metadata={
-            "help": "legacy cross_modal barcode baseline: weight of its H1-birth term"
-        },
-    )
-    cmtop_h1_topk: int = field(
-        default=0,
-        metadata={"help": "how many earliest H1 births to compare; 0 means |Q|+|C|"},
-    )
-    cmtop_endpoint_kd: str = field(
-        default="none",
-        metadata={
-            "help": "optional endpoint ablation: cosine, mse or none. The CM-Merge main method uses none; scaled by --kd_weight"
-        },
-    )
-    cmtop_geometry_weight: float = field(
-        default=0.0,
-        metadata={
-            "help": "weight of the VSP-style baseline term matching the raw cross-modal similarity matrices"
-        },
-    )
-    cmtop_normalize_scale: bool = field(
-        default=False,
-        metadata={
-            "help": "divide each persistence diagram by its mean bar length before comparing, leaving only the shape of the barcode"
+            "help": "lambda_merge: weight of the CM-Merge term. 0 is the no-teacher control"
         },
     )
     cmtop_reduction: str = field(
         default="mean",
         metadata={
-            "help": "mean (batch-size independent) or sum over indexed vertex pairs / legacy bars"
+            "help": "mean (batch-size independent) or sum over indexed vertex pairs"
         },
     )
     cmtop_merge_block: str = field(

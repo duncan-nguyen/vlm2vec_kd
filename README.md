@@ -144,7 +144,7 @@ No GPU, no model download, a few seconds each:
 
 ```bash
 python tools/misc/test_training_stack.py   # registry, criterion base, loop, images
-python tools/misc/test_cmtop.py            # merge hierarchy + persistence controls
+python tools/misc/test_cmtop.py            # merge hierarchy maths, gradients, criterion
 python tools/misc/test_talas.py            # TALAS's two losses, ASAM, the two-pass step
 python tools/misc/test_teacher_cache.py    # cache format and what it refuses
 ```
@@ -173,7 +173,7 @@ root**:
 scripts/train/                   README.md  the matrix + compatibility notes
   rkd/           contrastive_rkd
   uld/           universal_logit
-  cmtop/         cmtop                      + README.md, the CM-Merge ablation
+  cmtop/         cmtop                      + README.md, CM-Merge and its control
   talas/         talas                      + README.md, the 5-variant ablation
   emkd/          em_kd | em_kd_llava_ov     one criterion per student
   emo/           emo_loss
@@ -223,7 +223,7 @@ merge at each threshold and therefore detects a candidate permutation that
 destroys retrieval while preserving the barcode.
 
 ```bash
-# optional but recommended: encode the frozen teacher once, then every variant
+# optional but recommended: encode the frozen teacher once, then every row
 # and seed trains with no teacher model in the process at all
 TASK=cls STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls \
   bash scripts/data/precompute_teacher_embeddings.sh
@@ -239,10 +239,14 @@ python tools/misc/test_teacher_cache.py
 embedding. Criteria that need its hidden states are refused rather than served
 wrong data.
 
-`VARIANT` selects one row of the ablation (`student_only`, `endpoint`, `vsp`,
-`pointcloud_h0`, `barcode_h0`, `critical_edges`, `cmmerge`). The main method
-uses only retrieval loss plus one CM-Merge term; task-homogeneous batching and
-canonical candidate deduplication are enabled by default. Full runbook:
+`VARIANT` picks `cmmerge` or `student_only` — the same criterion with
+`--cmtop_weight 0`, so the no-teacher control keeps the identical sampler, batch
+construction and candidate deduplication and differs only in the loss. The
+objective is the retrieval loss plus one CM-Merge term, with one coefficient;
+task-homogeneous batching and canonical candidate deduplication are on by
+default. Note that the task-homogeneous sampler is enabled for `cmtop` only, so
+a comparison against a different `--kd_loss_type` changes the in-batch negatives
+as well as the loss. Full runbook:
 [scripts/train/cmtop/README.md](scripts/train/cmtop/README.md). Design and flag
 reference: [docs/cmtop_implementation.md](docs/cmtop_implementation.md); the
 research brief it implements:

@@ -115,7 +115,7 @@ $$
 }
 $$
 
-where $\mathcal L_{\mathrm{retrieval}}$ is the standard VLM2Vec contrastive objective. The main method has one distillation term and one coefficient. Endpoint KD, full-matrix geometry KD, and $H_1$ terms are comparison baselines, not components of the proposed objective.
+where $\mathcal L_{\mathrm{retrieval}}$ is the standard VLM2Vec contrastive objective. The method has exactly one distillation term and one coefficient. Endpoint KD, full-matrix geometry KD and $H_1$ terms are discussed above as points of comparison; they are not components of this objective and are not implemented in this repository. Any such baseline has to be run with its own tuned coefficient -- an L1 merge term and a squared diagram term are not comparable at a shared $\lambda$.
 
 ### 3.3 Multiscale interpretation
 

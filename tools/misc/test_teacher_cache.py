@@ -486,20 +486,13 @@ def criterion_against_cache(cache, qry, pos, dim):
     args = SimpleNamespace(
         kd_weight=0.0,
         cmtop_weight=1.0,
-        cmtop_mode="merge",
-        cmtop_h0_weight=1.0,
-        cmtop_h1_weight=0.0,
-        cmtop_h1_topk=0,
-        cmtop_endpoint_kd="none",
-        cmtop_geometry_weight=0.0,
-        cmtop_normalize_scale=False,
         cmtop_reduction="mean",
     )
     out = module.CrossModalTopologyLoss(args)(distiller, inputs)
     check(
         "CMTop runs with cached embeddings and no teacher model",
         all(torch.isfinite(v).all() for v in out.values())
-        and float(out["cmtop_loss"].detach()) > 0,
+        and float(out["cmmerge_loss"].detach()) > 0,
     )
     out["loss"].backward()
     check(

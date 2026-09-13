@@ -9,10 +9,11 @@
 #          other methods; see scripts/train/cmtop/README.md and
 #          docs/cmtop_implementation.md.
 #
-# One script, seven core variants. Pick one with VARIANT and vary SEED:
+# One script, two rows: the method and its no-teacher control.
+# Pick one with VARIANT and vary SEED:
 #
 #   VARIANT=cmmerge SEED=42 bash scripts/train/cmtop/fastvlm_vqa.sh
-#   for v in student_only endpoint vsp pointcloud_h0 barcode_h0 critical_edges cmmerge; do
+#   for v in cmmerge student_only; do
 #     for s in 42 43 44; do VARIANT=$v SEED=$s bash scripts/train/cmtop/fastvlm_vqa.sh; done
 #   done
 
@@ -48,36 +49,17 @@ VARIANT="${VARIANT:-cmmerge}"
 
 # lambda_Merge. Tune once on development data, then freeze across tasks/seeds.
 CMTOP_WEIGHT="${CMTOP_WEIGHT:-1.0}"
-KD_WEIGHT="${KD_WEIGHT:-0.3}"
 
 # Each variant is one row of the experiment plan. Only the KD-side flags differ.
-# The projector only exists to map teacher embeddings into the student space for
-# the endpoint term; registering it without using it makes DDP abort on multi-GPU,
-# so the variant that skips the endpoint term must not declare it.
-PROJECTOR_FLAGS=()
-
+# CM-Merge compares distances, never embeddings, so it needs no teacher/student
+# projector -- declaring one without using it makes DDP abort on multi-GPU.
 case "$VARIANT" in
-  student_only)     # contrastive only, no teacher signal
-    KD_FLAGS=(--kd_weight 0.0 --cmtop_weight 0.0 --cmtop_endpoint_kd none)
-    ;;
-  endpoint)         # standard endpoint KD on the final embeddings
-    KD_FLAGS=(--kd_weight "$KD_WEIGHT" --cmtop_weight 0.0 --cmtop_endpoint_kd cosine)
-    PROJECTOR_FLAGS=(--projector_config_path "configs/projector/projector_config_emo.json") ;;
-  vsp|relation_matrix)
-    KD_FLAGS=(--kd_weight 0.0 --cmtop_weight 0.0 --cmtop_endpoint_kd none
-              --cmtop_geometry_weight 1.0) ;;
-  pointcloud_h0)    # ordinary H0 of each modality's own cloud
-    KD_FLAGS=(--kd_weight 0.0 --cmtop_weight "$CMTOP_WEIGHT" --cmtop_endpoint_kd none --cmtop_mode point_cloud) ;;
-  barcode_h0|cmtop_h0)
-    KD_FLAGS=(--kd_weight 0.0 --cmtop_weight "$CMTOP_WEIGHT" --cmtop_endpoint_kd none --cmtop_mode cross_modal) ;;
-  critical_edges)
-    KD_FLAGS=(--kd_weight 0.0 --cmtop_weight "$CMTOP_WEIGHT" --cmtop_endpoint_kd none --cmtop_mode critical_edges) ;;
-  cmmerge)
-    KD_FLAGS=(--kd_weight 0.0 --cmtop_weight "$CMTOP_WEIGHT" --cmtop_endpoint_kd none --cmtop_mode merge) ;;
-  barcode_h0_h1|cmtop_h0_h1)
-    KD_FLAGS=(--kd_weight 0.0 --cmtop_weight "$CMTOP_WEIGHT" --cmtop_endpoint_kd none --cmtop_mode cross_modal --cmtop_h1_weight 0.1) ;;
+  cmmerge)          # the method
+    KD_FLAGS=(--cmtop_weight "$CMTOP_WEIGHT") ;;
+  student_only)     # the no-teacher control, same sampler and batch construction
+    KD_FLAGS=(--cmtop_weight 0.0) ;;
   *)
-    echo "unknown VARIANT '$VARIANT'; expected: student_only endpoint vsp pointcloud_h0 barcode_h0 critical_edges cmmerge barcode_h0_h1" >&2
+    echo "unknown VARIANT '$VARIANT'; expected: cmmerge student_only" >&2
     exit 1 ;;
 esac
 
@@ -122,7 +104,6 @@ torchrun --standalone \
     --image_resolution "448" \
     --projector_lr 5e-4 \
     "${CACHE_FLAGS[@]+"${CACHE_FLAGS[@]}"}" \
-    "${PROJECTOR_FLAGS[@]+"${PROJECTOR_FLAGS[@]}"}" \
     "${KD_FLAGS[@]}" \
     "$@"
 # Anything after the script name is forwarded to the trainer and, because these

@@ -9,14 +9,14 @@ launcher compatibility; the default method is now CM-Merge.
 
 | file | role |
 | --- | --- |
-| [src/topology.py](../src/topology.py) | bipartite MST, identity-preserving merge witnesses/matrix, legacy persistence primitives |
-| [src/criterions/cross_modal_topology.py](../src/criterions/cross_modal_topology.py) | CM-Merge objective and all structural controls |
+| [src/topology.py](../src/topology.py) | bipartite MST, identity-preserving merge witnesses/matrix |
+| [src/criterions/cross_modal_topology.py](../src/criterions/cross_modal_topology.py) | the CM-Merge objective |
 | [src/distiller.py](../src/distiller.py) | stable task/candidate identities and collation |
 | [src/training/dataloader.py](../src/training/dataloader.py) | task-homogeneous global batching under DDP |
-| [src/evaluation/topology_metrics.py](../src/evaluation/topology_metrics.py) | merge discrepancy, barcode controls and neighborhood fidelity |
+| [src/evaluation/topology_metrics.py](../src/evaluation/topology_metrics.py) | merge discrepancy and neighborhood fidelity |
 | [tools/eval_topology.py](../tools/eval_topology.py) | evaluation CLI over existing embedding dumps |
 | [tools/misc/test_cmtop.py](../tools/misc/test_cmtop.py) | definition-level maths, gradients and criterion checks |
-| [scripts/train/cmtop/](../scripts/train/cmtop/) | matched launchers and ablations |
+| [scripts/train/cmtop/](../scripts/train/cmtop/) | matched launchers |
 
 ## Exact computation
 
@@ -44,7 +44,7 @@ The main objective is only
 L = L_retrieval + cmtop_weight · mean_{a<b} |U_teacher[a,b] - U_student[a,b]|.
 ```
 
-There is no endpoint projector or auxiliary loss in the main configuration.
+That is the whole objective: no endpoint term, no projector, no auxiliary loss.
 `--cmtop_merge_block cross` restricts the comparison to query-candidate entries
 for the paper's block ablation; `all` is the default.
 
@@ -66,38 +66,30 @@ Two data constraints make those identities unambiguous:
   preserves many-query-to-one relations without duplicate candidate vertices.
 
 The criterion validates task ids and logs `num_unique_candidates` plus
-`candidate_unique_fraction`. Missing metadata is tolerated for old external
-datasets, but the built-in dataset always supplies it. An id of `-1` or a mixed
-task batch fails loudly.
+`candidate_unique_fraction`. A missing task id, an id of `-1` or a mixed task
+batch all fail loudly; pass `--cmtop_task_homogeneous False` to run on a
+mixed-task relation deliberately.
 
-## Ablations
+## Runs
 
-Every row uses the same criterion and retrieval objective. Only the structural
-target changes.
+Two rows, one criterion. The control is the same criterion with the CM-Merge
+term switched off, so it runs under exactly the same sampler, batch
+construction and candidate deduplication -- the only difference is the loss.
 
 | `VARIANT` | target | main flags |
 | --- | --- | --- |
-| `student_only` | no teacher signal | `--kd_weight 0 --cmtop_weight 0 --cmtop_endpoint_kd none` |
-| `endpoint` | conventional endpoint KD | `--cmtop_weight 0 --cmtop_endpoint_kd cosine` |
-| `vsp` / `relation_matrix` | dense relation-matrix KD | `--cmtop_weight 0 --cmtop_geometry_weight 1` |
-| `pointcloud_h0` | ordinary per-modality H0 | `--cmtop_mode point_cloud` |
-| `barcode_h0` | permutation-blind bipartite H0 | `--cmtop_mode cross_modal` |
-| `critical_edges` | correspondence-aware MST edges | `--cmtop_mode critical_edges` |
-| `cmmerge` | **full identity-preserving merge hierarchy** | `--cmtop_mode merge` |
-| `barcode_h0_h1` | legacy H0 + H1-birth control | `--cmtop_mode cross_modal --cmtop_h1_weight 0.1` |
-
-The legacy names `cmtop_h0` and `cmtop_h0_h1` remain aliases in launchers, but
-they are baselines, not the main proposal.
+| `cmmerge` | **identity-preserving merge hierarchy** | `--cmtop_weight 1.0` |
+| `student_only` | no teacher signal | `--cmtop_weight 0.0` |
 
 ```bash
-for v in student_only endpoint vsp pointcloud_h0 barcode_h0 critical_edges cmmerge; do
+for v in cmmerge student_only; do
   for s in 42 43 44; do
     VARIANT=$v SEED=$s bash scripts/train/cmtop/fastvlm_cls.sh
   done
 done
 ```
 
-Useful structural ablations after the main grid:
+Structural ablations of the method itself, after the main grid:
 
 ```bash
 # identity-aligned query-candidate entries only
@@ -106,6 +98,12 @@ VARIANT=cmmerge bash scripts/train/cmtop/fastvlm_cls.sh --cmtop_merge_block cros
 # demonstrate why canonical candidates matter
 VARIANT=cmmerge bash scripts/train/cmtop/fastvlm_cls.sh --cmtop_deduplicate_candidates False
 ```
+
+Comparing CM-Merge against a *different* `--kd_loss_type` is not an apples-to-apples
+comparison as the repo stands: `TaskHomogeneousSampler` is enabled for `cmtop`
+only (see [src/training/dataloader.py](../src/training/dataloader.py)), so such a
+run differs in its in-batch negatives as well as in its loss. Either enable the
+sampler for the other method too, or report the difference.
 
 ## Evaluation
 
@@ -123,9 +121,7 @@ python tools/eval_topology.py \
   --output runs/cmmerge_seed42_structure.json
 ```
 
-The primary structural metric is `cross_modal_merge_l1`. Exact diagram
-Wasserstein distances (`cross_modal_h0`, `cross_modal_h1_birth`) test whether
-barcode preservation alone explains the result. `recall@k` overlap and
+The primary structural metric is `cross_modal_merge_l1`. `recall@k` overlap and
 Spearman correlation measure fidelity to the teacher over the full canonical
 candidate pool; `teacher_mst_edge_recall` and component `ARI` at teacher
 distance quantiles provide correspondence-aware diagnostics that are not the
@@ -147,8 +143,8 @@ The CM-Merge checks independently verify:
 - symmetry, zero diagonal and the L-infinity stability bound;
 - finite non-zero gradients through witness distances;
 - equivariance to a simultaneous permutation of teacher/student identities;
-- the candidate-permutation counterexample separating CM-Merge from H0;
-- candidate deduplication, mixed-task rejection and every ablation mode;
+- the candidate-permutation counterexample separating CM-Merge from a barcode;
+- candidate deduplication and mixed-task / missing-metadata rejection;
 - disjoint, task-consistent DDP sampler slices.
 
 ## Operational notes
@@ -164,7 +160,7 @@ going substantially above 256 indexed vertices per side.
 
 CM-Merge reads only final teacher embeddings and therefore supports
 `--teacher_embedding_cache`. Precompute once and reuse the same cache across
-variants and seeds:
+seeds:
 
 ```bash
 TASK=cls STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls \
@@ -173,5 +169,13 @@ TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls VARIANT=cmmerge \
   bash scripts/train/cmtop/fastvlm_cls.sh
 ```
 
-The endpoint variant alone declares the teacher-to-student projector. Declaring
-it for CM-Merge would create unused trainable parameters and can break DDP.
+CM-Merge compares distances, never embeddings, so it needs no teacher-to-student
+projector at any teacher/student width. Declaring one would create unused
+trainable parameters and can break DDP.
+
+Gradients move the weights of the edges currently in the student's MST; nothing
+pushes a *different* edge into that tree. The loss therefore has a floor set by
+the tree structure the student starts from -- in the self-check it converges to
+~35% of its initial value with 5 of 15 MST edges shared with the teacher. Read
+`teacher_mst_edge_recall` alongside the loss curve rather than expecting it to
+reach zero.

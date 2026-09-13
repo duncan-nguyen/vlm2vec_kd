@@ -30,7 +30,7 @@ TASK=cls STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls \
 
 Set `MMEB_TRAIN_DIR` and `MMEB_EVAL_DIR` if the images are elsewhere. The cache
 is optional but recommended: CM-Merge reads only the frozen teacher's final
-embedding, so every variant and seed can reuse it without loading the teacher.
+embedding, so every row and seed can reuse it without loading the teacher.
 The cache fingerprint includes subsets, their order, `percent_data` and image
 settings; incompatible caches are refused.
 
@@ -52,7 +52,7 @@ task. A tiny smoke percentage may violate that; lower
 ## 4. Main grid
 
 ```bash
-for v in student_only endpoint vsp pointcloud_h0 barcode_h0 critical_edges cmmerge; do
+for v in cmmerge student_only; do
   for s in 42 43 44; do
     TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls VARIANT=$v SEED=$s \
       bash scripts/train/cmtop/fastvlm_cls.sh
@@ -68,24 +68,24 @@ The same interface is available for:
 
 | `VARIANT` | purpose |
 | --- | --- |
-| `student_only` | retrieval objective only |
-| `endpoint` | conventional projected endpoint KD |
-| `vsp` | dense query-candidate relation-matrix KD |
-| `pointcloud_h0` | ordinary topology of each modality |
-| `barcode_h0` | bipartite H0 barcode without node correspondence |
-| `critical_edges` | correspondence-aware MST-edge control |
-| `cmmerge` | **main correspondence-aware merge-hierarchy method** |
-| `barcode_h0_h1` | optional legacy barcode control |
+| `cmmerge` | **correspondence-aware merge-hierarchy method** |
+| `student_only` | retrieval objective only, everything else identical |
 
-Only `endpoint` creates the teacher-to-student projector. The other variants do
-not use endpoint KD, so declaring it would leave unused DDP parameters.
+`student_only` is the same criterion with `--cmtop_weight 0`, so it keeps the
+task-homogeneous sampler, the candidate deduplication and the batch
+construction. The loss is the only thing that changes between the two rows.
 
-The launchers still accept `cmtop_h0` and `cmtop_h0_h1` as aliases for the two
-legacy barcode variants. Do not report `cmtop_h0` as the main method.
+CM-Merge needs no teacher-to-student projector at any width: it compares
+distances, not embeddings. Declaring one would leave unused DDP parameters.
+
+Comparing against a different `--kd_loss_type` is *not* like-for-like as the
+repo stands. `TaskHomogeneousSampler` is enabled for `cmtop` only, so such a run
+also changes the in-batch negatives. Enable the sampler for the other method too,
+or report the difference.
 
 ## 5. Structural ablations
 
-Run these after the main seven-row grid:
+Run these after the main grid:
 
 ```bash
 # Full U versus only its query-candidate block
@@ -124,26 +124,24 @@ python tools/eval_topology.py \
   --batch_size 128 --output runs/cmmerge_seed42_structure.json
 ```
 
-Read `cross_modal_merge_l1` as the primary structural metric. The H0/H1
-diagram distances are permutation-blind controls. `recall@k` and `spearman` are
-fidelity to the teacher; MST-edge recall and component ARI test identity-aligned
-connectivity without reusing the training scalar. MMEB accuracy is performance
-against ground truth; report both.
+Read `cross_modal_merge_l1` as the primary structural metric. `recall@k` and
+`spearman` are fidelity to the teacher; MST-edge recall and component ARI test
+identity-aligned connectivity without reusing the training scalar. MMEB accuracy
+is performance against ground truth; report both.
 
 ## Environment variables
 
 | variable | default | meaning |
 | --- | --- | --- |
-| `VARIANT` | `cmmerge` | ablation row |
+| `VARIANT` | `cmmerge` | `cmmerge` or `student_only` |
 | `SEED` | `42` | run seed |
 | `TEACHER_CACHE` | unset | compatible precomputed teacher embeddings |
 | `MMEB_TRAIN_DIR` | `./vlm2vec_train/MMEB-train` | training images |
 | `NUM_GPUS_PER_NODE` | `1` | DDP world size on one node |
 | `BATCH_SIZE` | `16` FastVLM / `8` OneVision | per-device micro-batch size |
 | `OUTPUT_DIR` | launcher-specific | checkpoint directory |
-| `CMTOP_WEIGHT` | `1.0` | main `lambda_merge` |
-| `KD_WEIGHT` | `0.3` | endpoint-only baseline weight |
+| `CMTOP_WEIGHT` | `1.0` | `lambda_merge`, the only loss coefficient |
 
 The effective relation batch is local batch size times world size. Use 128–256
-when memory permits and keep it identical across variants. Because the graph is
+when memory permits and keep it identical across rows. Because the graph is
 the micro-batch, gradient accumulation does not enlarge its topology.
