@@ -42,7 +42,7 @@ TASK=cls STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls \
 TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls bash scripts/train/talas/fastvlm_cls.sh
 ```
 
-One cache per `(student, task)` cell, shared with `rkd`, `uld` and `cmtop`.
+One cache per `(student, task)` cell, shared with `rkd`, `uld` and `ours`.
 Leave `TEACHER_CACHE` unset to run the teacher live.
 
 ## 3. The variants

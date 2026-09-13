@@ -1,7 +1,7 @@
 """Report how much of the teacher's retrieval structure a student preserves.
 
 This is the "topology discrepancy + neighborhood preservation" column of the
-CMTop experiment plan (docs/cross_modal_topological_distillation.md, section 4).
+Ours experiment plan (docs/cross_modal_topological_distillation.md, section 4).
 It reads the query/target embedding dumps that `tools/eval_mmeb.py` already
 writes to `--encode_output_path`, so no re-encoding is needed:
 
@@ -104,7 +104,7 @@ def align_pairs(eval_data, teacher_maps, student_maps):
                 skipped += 1
 
     if not rows["teacher_q"] or not rows["teacher_c"]:
-        raise ValueError("no labelled query/candidate relation exists in all dumps")
+        raise ValueError("no identity-aligned query/candidate relation exists in all dumps")
     return {k: np.stack(v, axis=0) for k, v in rows.items()}, skipped
 
 
@@ -120,7 +120,6 @@ def report(pairs, args):
             batch_size=args.batch_size,
             num_batches=args.num_batches,
             seed=args.seed,
-            h1_topk=args.h1_topk or None,
             partition_quantiles=tuple(args.partition_quantiles),
         ),
         "neighborhood_preservation": neighborhood_preservation(
@@ -161,7 +160,6 @@ def main():
         help="filtration size; match the training batch size",
     )
     parser.add_argument("--num_batches", type=int, default=50)
-    parser.add_argument("--h1_topk", type=int, default=0, help="0 uses every H1 birth")
     parser.add_argument(
         "--partition_quantiles",
         type=float,

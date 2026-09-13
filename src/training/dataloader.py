@@ -43,7 +43,7 @@ DEFAULT_NUM_WORKERS = 4
 class TaskHomogeneousSampler(Sampler):
     """Shuffle globally while keeping each DDP batch inside one task.
 
-    CM-Merge builds one retrieval graph per optimizer micro-batch.  Mixing, for
+    Ours builds one retrieval graph per optimizer micro-batch.  Mixing, for
     example, VQA answers and classification labels introduces meaningless
     cross-task edges.  This sampler first makes full *global* batches within
     every contiguous task range, then shuffles those batches and gives each rank
@@ -161,8 +161,8 @@ def build_train_dataloader(dataset, collator, training_args, sampler=None):
     """
     if sampler is None:
         task_homogeneous = (
-            getattr(training_args, "kd_loss_type", None) == "cmtop"
-            and getattr(training_args, "cmtop_task_homogeneous", True)
+            getattr(training_args, "kd_loss_type", None) == "ours"
+            and getattr(training_args, "ours_task_homogeneous", True)
         )
         sampler = build_train_sampler(
             dataset,

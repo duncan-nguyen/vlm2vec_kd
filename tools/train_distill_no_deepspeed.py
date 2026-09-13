@@ -1,8 +1,8 @@
 """Distillation training without DeepSpeed, under bf16 autocast.
 
-    torchrun --nproc_per_node=N tools/train_distill_no_deepspeed.py --kd_loss_type cmtop ...
+    torchrun --nproc_per_node=N tools/train_distill_no_deepspeed.py --kd_loss_type ours ...
 
-Used by `scripts/train/cmtop/`. Same loop as `train_distill_ddp.py`; the
+Used by `scripts/train/ours/`. Same loop as `train_distill_ddp.py`; the
 difference is the precision policy. This entrypoint used to run under
 Accelerate's `mixed_precision="bf16"`, so it keeps bf16 autocast around the
 forward -- the image processors hand back fp32 pixel values and the backbones

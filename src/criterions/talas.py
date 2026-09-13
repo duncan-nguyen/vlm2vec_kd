@@ -57,7 +57,7 @@ class TALASLoss(DistillCriterion):
         super().__init__(args)
         # --kd_weight is not read: TALAS weights its two KD terms separately
         # with --talas_tamd_weight (lambda_2) and --talas_lasd_weight (lambda_3),
-        # so the outer weight is neutralised the way CMTop neutralises it.
+        # so the outer weight is neutralised the way Ours neutralises it.
         self.kd_loss_weight = 1.0
         self.contrastive_weight = float(args.talas_contrastive_weight)
         self.tamd_weight = float(args.talas_tamd_weight)

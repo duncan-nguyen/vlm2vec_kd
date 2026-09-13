@@ -41,7 +41,7 @@ never need setting.
 | --- | --- | --- | --- | --- |
 | `rkd/` | `contrastive_rkd` | autocast | – | yes |
 | `uld/` | `universal_logit` | autocast | – | yes |
-| `cmtop/` | `cmtop` | autocast | `projector_config_emo.json` | yes |
+| `ours/` | `ours` | autocast | `projector_config_emo.json` | yes |
 | `talas/` | `talas` | autocast | *(built by the criterion)* | yes |
 | `emkd/` | `em_kd` \| `em_kd_llava_ov` | ddp | `projector_config_emo.json` | no |
 | `emo/` | `emo_loss` | ddp | `projector_config_emo.json` | no |
@@ -107,7 +107,7 @@ written against:
 That gives three groups of methods:
 
 **1. Layout-independent — correct for both students.** `contrastive_rkd`,
-`universal_logit`, `cmtop` read nothing but the pooled query/candidate
+`universal_logit`, `ours` read nothing but the pooled query/candidate
 embeddings. `talas` reads one pooled embedding *per student layer*, but obtains
 each through the student's own pooling and attention mask — the identical call
 the model makes for its final embedding — so it inherits that pooling's layout
@@ -144,7 +144,7 @@ a cell reached by overriding `--kd_loss_type` on another method's launcher.
 
 ## Teacher embedding cache
 
-`contrastive_rkd`, `universal_logit`, `cmtop` and `talas` read nothing from the teacher
+`contrastive_rkd`, `universal_logit`, `ours` and `talas` read nothing from the teacher
 but its final embedding, so they can train with **no teacher model in the
 process**: no teacher forward, no teacher-side image preprocessing, no teacher
 weights on the device.
@@ -169,7 +169,7 @@ their own cache directory:
 | `cache/b3_qwen2_2b_llava_onevision_cls` | `TASK=cls STUDENT=llava_onevision` (336) |
 | `cache/b3_qwen2_2b_llava_onevision_vqa` | `TASK=vqa STUDENT=llava_onevision` (336) |
 
-One cache then serves every cache-capable method, CMTop variant and seed at that
+One cache then serves every cache-capable method, Ours variant and seed at that
 cell. Criteria that need the teacher's hidden states are refused, not served
 wrong data.
 
@@ -197,9 +197,8 @@ Every generated launcher accepts:
 | `NUM_GPUS_PER_NODE` | `1` | `torchrun --nproc_per_node` |
 | `TEACHER_CACHE` | *(unset)* | cache-capable methods only; unset runs the teacher live |
 
-The `cmtop/` launchers add `VARIANT` (`student_only`, `endpoint`, `vsp`,
-`pointcloud_h0`, `cmtop_h0`, `cmtop_h0_h1`), `CMTOP_WEIGHT` and `KD_WEIGHT` —
-see [cmtop/README.md](cmtop/README.md).
+The `ours/` launchers add `VARIANT` (`ours`, `student_only`, `topo_only`) and
+`OURS_WEIGHT` — see [ours/README.md](ours/README.md).
 
 The `talas/` launchers add `VARIANT` (`talas`, `no_asam`, `sam`, `no_lasd`,
 `no_tamd`), `TALAS_CONTRASTIVE_WEIGHT`, `TAMD_WEIGHT`, `LASD_WEIGHT`,

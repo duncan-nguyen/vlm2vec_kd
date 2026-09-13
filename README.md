@@ -108,7 +108,7 @@ scripts/
   eval/          cls.sh / vqa.sh / cls_ood.sh / vqa_ood.sh / all.sh (Table 1)
 tools/           python entrypoints
   train_distill_ddp.py         DDP trainer, no autocast (emkd/emo/hierd/pdtw/pproj)
-  train_distill_no_deepspeed.py DDP trainer under bf16 autocast (cmtop/rkd/uld/talas)
+  train_distill_no_deepspeed.py DDP trainer under bf16 autocast (ours/rkd/uld/talas)
   train_distillation.py        DeepSpeed variant; no launcher uses it
   train_vlm2vec.py             VLM2Vec baseline trainer (was train.py)
   eval_mmeb.py  eval_mmeb_simple.py  prepare_data.py  visualizer.py
@@ -144,7 +144,7 @@ No GPU, no model download, a few seconds each:
 
 ```bash
 python tools/misc/test_training_stack.py   # registry, criterion base, loop, images
-python tools/misc/test_cmtop.py            # merge hierarchy + persistence controls
+python tools/misc/test_ours.py            # merge hierarchy maths, gradients, criterion
 python tools/misc/test_talas.py            # TALAS's two losses, ASAM, the two-pass step
 python tools/misc/test_teacher_cache.py    # cache format and what it refuses
 ```
@@ -173,7 +173,7 @@ root**:
 scripts/train/                   README.md  the matrix + compatibility notes
   rkd/           contrastive_rkd
   uld/           universal_logit
-  cmtop/         cmtop                      + README.md, the CM-Merge ablation
+  ours/         ours                      + README.md, Ours and its control
   talas/         talas                      + README.md, the 5-variant ablation
   emkd/          em_kd | em_kd_llava_ov     one criterion per student
   emo/           emo_loss
@@ -213,22 +213,24 @@ evaluation code paths (`low` is 448 in `src/distiller.py` and 128 in
 `src/data/dataset/mmeb_dataset.py`), so a preset silently changes preprocessing
 between the two.
 
-### Label-aware cross-modal merge distillation (CM-Merge)
+### Correspondence-aware cross-modal merge distillation (Ours)
 
-`--kd_loss_type cmtop` now distils the labelled merge hierarchy of the
-query-candidate filtration. Unlike a sorted H0 barcode, it retains which
-query/candidate pairs merge at each threshold and therefore detects a candidate
-permutation that destroys retrieval while preserving the barcode.
+`--kd_loss_type ours` now distils an identity-preserving merge hierarchy of the
+query-candidate filtration. Here, identity refers to the row-wise correspondence
+between teacher and student query/candidate vertices, not to dataset class labels.
+Unlike a sorted H0 barcode, the objective retains which query/candidate pairs
+merge at each threshold and therefore detects a candidate permutation that
+destroys retrieval while preserving the barcode.
 
 ```bash
-# optional but recommended: encode the frozen teacher once, then every variant
+# optional but recommended: encode the frozen teacher once, then every row
 # and seed trains with no teacher model in the process at all
 TASK=cls STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls \
   bash scripts/data/precompute_teacher_embeddings.sh
 
-TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls VARIANT=cmmerge SEED=42 \
-  bash scripts/train/cmtop/fastvlm_cls.sh
-python tools/misc/test_cmtop.py          # self-checks, no GPU or model download
+TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls VARIANT=ours SEED=42 \
+  bash scripts/train/ours/fastvlm_cls.sh
+python tools/misc/test_ours.py          # self-checks, no GPU or model download
 python tools/misc/test_teacher_cache.py
 ```
 
@@ -237,12 +239,17 @@ python tools/misc/test_teacher_cache.py
 embedding. Criteria that need its hidden states are refused rather than served
 wrong data.
 
-`VARIANT` selects one row of the ablation (`student_only`, `endpoint`, `vsp`,
-`pointcloud_h0`, `barcode_h0`, `critical_edges`, `cmmerge`). The main method
-uses only retrieval loss plus one CM-Merge term; task-homogeneous batching and
-canonical candidate deduplication are enabled by default. Full runbook:
-[scripts/train/cmtop/README.md](scripts/train/cmtop/README.md). Design and flag
-reference: [docs/cmtop_implementation.md](docs/cmtop_implementation.md); the
+`VARIANT` picks `ours`, `topo_only` (`--ours_retrieval_loss False`, the L_topo
+term alone) or `student_only` — the same criterion with
+`--ours_weight 0`, so the no-teacher control keeps the identical sampler, batch
+construction and candidate deduplication and differs only in the loss. The
+objective is the retrieval loss plus one structural term L_topo, with one coefficient;
+task-homogeneous batching and canonical candidate deduplication are on by
+default. Note that the task-homogeneous sampler is enabled for `ours` only, so
+a comparison against a different `--kd_loss_type` changes the in-batch negatives
+as well as the loss. Full runbook:
+[scripts/train/ours/README.md](scripts/train/ours/README.md). Design and flag
+reference: [docs/ours_implementation.md](docs/ours_implementation.md); the
 research brief it implements:
 [docs/cross_modal_topological_distillation.md](docs/cross_modal_topological_distillation.md).
 
@@ -281,7 +288,7 @@ than methods and have no launchers of their own — run them by passing
 `--kd_loss_type` to a `hierd/` launcher.
 
 Completeness is not the same as validity. `contrastive_rkd`, `universal_logit`,
-`cmtop` and `talas` read only pooled embeddings; EM-KD has one criterion per student; the
+`ours` and `talas` read only pooled embeddings; EM-KD has one criterion per student; the
 span criteria (HieRD) derive their offsets from the student's padding side in
 `src/criterions/span_common.py`. The remaining three — `emo_loss`,
 `proposal_dtw`, `proposal_proj` — still slice hidden states by a position
@@ -300,9 +307,9 @@ resolution -- `--image_resolution`, `--model_backbone`, the LoRA rank,
 `--pooling` and `--normalize` are read off the run rather than retyped:
 
 ```bash
-bash scripts/train/cmtop/fastvlm_vqa.sh                                    # evaluates and uploads
-bash scripts/train/cmtop/fastvlm_vqa.sh --eval_benchmarks vqa_ind vqa_ood  # narrow it
-bash scripts/train/cmtop/fastvlm_vqa.sh --eval_after_train False           # skip it
+bash scripts/train/ours/fastvlm_vqa.sh                                    # evaluates and uploads
+bash scripts/train/ours/fastvlm_vqa.sh --eval_benchmarks vqa_ind vqa_ood  # narrow it
+bash scripts/train/ours/fastvlm_vqa.sh --eval_after_train False           # skip it
 ```
 
 It needs the MMEB-eval images (`python scripts/data/download_mmeb.py --eval`,
@@ -334,8 +341,8 @@ checkpoint -- weights, config, processor, the eval `summary.json` and a
 this repo uses its own loop rather than `Trainer`.
 
 ```bash
-bash scripts/train/cmtop/fastvlm_vqa.sh                     # uploads when it finishes
-bash scripts/train/cmtop/fastvlm_vqa.sh --push_to_hub False  # keep it local
+bash scripts/train/ours/fastvlm_vqa.sh                     # uploads when it finishes
+bash scripts/train/ours/fastvlm_vqa.sh --push_to_hub False  # keep it local
 ```
 
 `--hub_private_repo` defaults to true here, against Hugging Face's own default:
@@ -352,8 +359,8 @@ they are compared against are collected separately, and each run occupies
 `<kd_loss_type>/<student>/<task>/<basename of --output_dir>` inside its repo:
 
 ```
-nqdhocai/vlm2vec-kd-ours/       cmtop/FastVLM-0.5B/vqa/cmmerge_seed42/
-                                cmtop/llava-onevision-qwen2-0.5b-ov-hf/cls/cmmerge_seed43/
+nqdhocai/vlm2vec-kd-ours/       ours/FastVLM-0.5B/vqa/ours_seed42/
+                                ours/llava-onevision-qwen2-0.5b-ov-hf/cls/ours_seed43/
 nqdhocai/vlm2vec-kd-baselines/  talas/FastVLM-0.5B/cls/talas_seed42/
                                 span_propose_attn/FastVLM-0.5B/cls/hierd_fastvlm_cls/
                                 contrastive_rkd/FastVLM-0.5B/cls/RKD/
@@ -367,7 +374,7 @@ carries the KD settings, since the checkpoint's own `config.json` describes only
 the backbone and two directories differing by one `--kd_weight` would otherwise
 be indistinguishable.
 
-Which repo a run goes to follows `--kd_loss_type`: `cmtop` is this work's own,
+Which repo a run goes to follows `--kd_loss_type`: `ours` is this work's own,
 everything else is a published method being reproduced (TALAS and HieRD have
 their papers in [docs/baseline methods/](docs/baseline%20methods)). The set is
 `OURS_METHODS` in [src/training/hub.py](src/training/hub.py) -- a new proposal
@@ -488,7 +495,7 @@ Roughly in order of how much they buy, for any method:
 1. **Precompute the teacher's embeddings.** The teacher is frozen and the data
    is not augmented, so its embedding for a sample is a pure function of the
    dataset index. Methods that read nothing else from the teacher —
-   `cmtop`, `contrastive_rkd`, `universal_logit` — can then run with no teacher
+   `ours`, `contrastive_rkd`, `universal_logit` — can then run with no teacher
    model in the process: no teacher forward (the larger of the two models), no
    teacher-side image preprocessing, and its weights out of GPU memory, which is
    what lets the batch grow.
@@ -496,7 +503,7 @@ Roughly in order of how much they buy, for any method:
    ```bash
    TASK=cls STUDENT=fastvlm TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls \
      bash scripts/data/precompute_teacher_embeddings.sh
-   TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls bash scripts/train/cmtop/fastvlm_cls.sh
+   TEACHER_CACHE=cache/b3_qwen2_2b_fastvlm_cls bash scripts/train/ours/fastvlm_cls.sh
    ```
 
    One cache serves every cache-compatible method, variant and seed *at that

@@ -13,7 +13,7 @@ rest of the codebase asks about a criterion is derived from it.
 
 The class is named rather than imported so that `import src.criterions` stays
 cheap and dependency-light: `span_propose*` pull in spacy, numba and tslearn,
-which a CMTop run has no use for. The module is imported the first time that
+which an `ours` run has no use for. The module is imported the first time that
 particular criterion is actually built.
 """
 
@@ -77,13 +77,13 @@ _SPECS = (
         summary="Relational KD (distance + angle) on the final embeddings.",
     ),
     CriterionSpec(
-        name="cmtop",
+        name="ours",
         module="src.criterions.cross_modal_topology",
         cls="CrossModalTopologyLoss",
         student_attentions=False,
         teacher_attentions=False,
         teacher_embedding_only=True,
-        summary="CM-Merge: labelled multiscale connectivity of the retrieval relation.",
+        summary="Ours: correspondence-aware multiscale connectivity of the retrieval relation.",
     ),
     CriterionSpec(
         name="talas",

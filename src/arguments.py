@@ -317,70 +317,38 @@ class TrainingArguments(TrainingArguments):
             "help": "min_samples for DBSCAN when clustering teacher features for span loss"
         },
     )
-    # CM-Merge and its structural ablations (kd_loss_type="cmtop")
-    cmtop_weight: float = field(
+    # Ours (kd_loss_type="ours"); see docs/ours_implementation.md
+    ours_weight: float = field(
         default=1.0,
         metadata={
-            "help": "lambda_merge: weight of CM-Merge (or of the selected topological ablation). 0 disables topology"
+            "help": "lambda_topo: weight of the structural term L_topo. 0 is the no-teacher control"
         },
     )
-    cmtop_mode: str = field(
-        default="merge",
-        metadata={
-            "help": "structural target, '+'-joined: merge (labelled bipartite merge hierarchy; main), critical_edges, cross_modal (legacy barcode H0/H1), point_cloud, or union"
-        },
-    )
-    cmtop_h0_weight: float = field(
-        default=1.0,
-        metadata={"help": "legacy barcode baseline: weight of its H0 term"},
-    )
-    cmtop_h1_weight: float = field(
-        default=0.0,
-        metadata={
-            "help": "legacy cross_modal barcode baseline: weight of its H1-birth term"
-        },
-    )
-    cmtop_h1_topk: int = field(
-        default=0,
-        metadata={"help": "how many earliest H1 births to compare; 0 means |Q|+|C|"},
-    )
-    cmtop_endpoint_kd: str = field(
-        default="none",
-        metadata={
-            "help": "optional endpoint ablation: cosine, mse or none. The CM-Merge main method uses none; scaled by --kd_weight"
-        },
-    )
-    cmtop_geometry_weight: float = field(
-        default=0.0,
-        metadata={
-            "help": "weight of the VSP-style baseline term matching the raw cross-modal similarity matrices"
-        },
-    )
-    cmtop_normalize_scale: bool = field(
-        default=False,
-        metadata={
-            "help": "divide each persistence diagram by its mean bar length before comparing, leaving only the shape of the barcode"
-        },
-    )
-    cmtop_reduction: str = field(
-        default="mean",
-        metadata={
-            "help": "mean (batch-size independent) or sum over labelled vertex pairs / legacy bars"
-        },
-    )
-    cmtop_merge_block: str = field(
-        default="all",
-        metadata={
-            "help": "CM-Merge pair block: all labelled vertex pairs (main) or cross for query-candidate pairs only"
-        },
-    )
-    cmtop_task_homogeneous: bool = field(
+    ours_retrieval_loss: bool = field(
         default=True,
         metadata={
-            "help": "form each global CMTop batch from one task and validate the gathered graph"
+            "help": "keep L_ret in the objective. False trains on ours_weight * L_topo alone (loss-term ablation); the contrastive loss is still logged"
         },
     )
-    cmtop_deduplicate_candidates: bool = field(
+    ours_reduction: str = field(
+        default="mean",
+        metadata={
+            "help": "mean (batch-size independent) or sum over indexed vertex pairs"
+        },
+    )
+    ours_merge_block: str = field(
+        default="all",
+        metadata={
+            "help": "L_topo pair block: all identity-aligned vertex pairs (main) or cross for query-candidate pairs only"
+        },
+    )
+    ours_task_homogeneous: bool = field(
+        default=True,
+        metadata={
+            "help": "form each global Ours batch from one task and validate the gathered graph"
+        },
+    )
+    ours_deduplicate_candidates: bool = field(
         default=True,
         metadata={
             "help": "collapse repeated candidate identities before constructing the cross-modal relation"

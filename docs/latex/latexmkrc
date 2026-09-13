@@ -1,0 +1,7 @@
+# Keep generated files out of the source tree.
+$aux_dir = 'build';
+$out_dir = 'build';
+
+# Search bundled conference dependencies without exposing them at the root.
+ensure_path('TEXINPUTS', './style//');
+ensure_path('BSTINPUTS', './style//');

@@ -1,8 +1,8 @@
 #!/bin/bash
-# Run the FastVLM VQA CMTop pipeline on one 8-GPU node.
+# Run the FastVLM VQA Ours pipeline on one 8-GPU node.
 #
-#   bash scripts/train/cmtop/run_fastvlm_vqa_pipeline.sh
-#   EVAL_AFTER_TRAIN=1 bash scripts/train/cmtop/run_fastvlm_vqa_pipeline.sh
+#   bash scripts/train/ours/run_fastvlm_vqa_pipeline.sh
+#   EVAL_AFTER_TRAIN=1 bash scripts/train/ours/run_fastvlm_vqa_pipeline.sh
 #
 # The second form downloads the MMEB-eval images and evaluates
 # checkpoint-final as the last step of the training run itself.
@@ -20,8 +20,8 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 HF_HOME="${HF_HOME:-/mnt/models/vlm_2_vec_storage/hf_cache}"
 HF_TOKEN_FILE="${HF_TOKEN_FILE:-/home/tensara/.hf_token_r3}"
 TEACHER_CACHE="${TEACHER_CACHE:-cache/b3_qwen2_2b_fastvlm_vqa}"
-FULL_OUTPUT="${FULL_OUTPUT:-training/CMTop/fastvlm_vqa/cmmerge_seed42}"
-SMOKE_OUTPUT="${SMOKE_OUTPUT:-training/CMTop/fastvlm_vqa/cmmerge_seed42_smoke}"
+FULL_OUTPUT="${FULL_OUTPUT:-training/ours/fastvlm_vqa/ours_seed42}"
+SMOKE_OUTPUT="${SMOKE_OUTPUT:-training/ours/fastvlm_vqa/ours_seed42_smoke}"
 
 # EVAL_AFTER_TRAIN=1 adds an MMEB evaluation to the end of the training run
 # itself -- the subsets are sharded across the same eight ranks, and the image
@@ -54,10 +54,10 @@ if [[ -z "${HF_TOKEN:-}" ]] && [[ -r "$HF_TOKEN_FILE" ]]; then
 fi
 
 mkdir -p logs
-PIPELINE_LOG="logs/cmtop_vqa_pipeline.log"
-CACHE_LOG="logs/cmtop_vqa_cache_fixed_8gpu.log"
-SMOKE_LOG="logs/cmtop_vqa_smoke_fixed_8gpu.log"
-TRAIN_LOG="logs/cmtop_vqa_train_fixed_8gpu.log"
+PIPELINE_LOG="logs/ours_vqa_pipeline.log"
+CACHE_LOG="logs/ours_vqa_cache_fixed_8gpu.log"
+SMOKE_LOG="logs/ours_vqa_smoke_fixed_8gpu.log"
+TRAIN_LOG="logs/ours_vqa_train_fixed_8gpu.log"
 
 archive_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 for log_file in "$PIPELINE_LOG" "$SMOKE_LOG" "$TRAIN_LOG"; do
@@ -109,10 +109,10 @@ run_phase SMOKE "$SMOKE_LOG" env \
   NUM_GPUS_PER_NODE="$NUM_GPUS_PER_NODE" \
   NUM_WORKERS="$NUM_WORKERS" \
   TEACHER_CACHE="$TEACHER_CACHE" \
-  VARIANT=cmmerge \
+  VARIANT=ours \
   SEED=42 \
   OUTPUT_DIR="$SMOKE_OUTPUT" \
-  bash scripts/train/cmtop/fastvlm_vqa.sh \
+  bash scripts/train/ours/fastvlm_vqa.sh \
     --max_steps 10 \
     --dataloader_num_workers "$NUM_WORKERS" \
     --save_strategy no \
@@ -126,7 +126,7 @@ if [[ "$EVAL_AFTER_TRAIN" == "1" ]]; then
   EVAL_FLAGS=(--eval_after_train True
               --eval_benchmarks "${eval_groups[@]}"
               --eval_image_dir "$MMEB_EVAL_DIR")
-  run_phase EVAL_DOWNLOAD logs/cmtop_vqa_eval_download.log \
+  run_phase EVAL_DOWNLOAD logs/ours_vqa_eval_download.log \
     env -u HF_XET_HIGH_PERFORMANCE python -u scripts/data/download_mmeb.py \
       --eval --eval-out "$MMEB_EVAL_DIR"
 else
@@ -139,10 +139,10 @@ run_phase TRAIN "$TRAIN_LOG" env \
   NUM_GPUS_PER_NODE="$NUM_GPUS_PER_NODE" \
   NUM_WORKERS="$NUM_WORKERS" \
   TEACHER_CACHE="$TEACHER_CACHE" \
-  VARIANT=cmmerge \
+  VARIANT=ours \
   SEED=42 \
   OUTPUT_DIR="$FULL_OUTPUT" \
-  bash scripts/train/cmtop/fastvlm_vqa.sh \
+  bash scripts/train/ours/fastvlm_vqa.sh \
     --dataloader_num_workers "$NUM_WORKERS" \
     --report_to none \
     "${EVAL_FLAGS[@]+"${EVAL_FLAGS[@]}"}"

@@ -1,0 +1,203 @@
+\section{Method}
+\label{sec:method}
+
+We consider knowledge distillation for instruction-conditioned multimodal
+retrieval. A frozen teacher and a trainable student may use different
+architectures and embedding dimensions. Our objective therefore transfers the
+teacher's relational structure without aligning embedding coordinates. The
+central object is the correspondence-aware, multiscale connectivity hierarchy
+induced by query--candidate distances: it records both when vertices become
+connected and which query and candidate identities participate in each
+connection. Throughout this section, identity refers to row-wise
+teacher--student correspondence, not to an additional dataset class-label
+annotation.
+
+\subsection{Problem Setup}
+\label{sec:method-setup}
+
+Let a global training batch contain $B$ query--positive pairs
+$\mathcal{B}=\{(x_i,y_i)\}_{i=1}^{B}$ drawn from a single retrieval task. For
+model $M\in\{\teacher,\student\}$, we denote its $\ell_2$-normalised query and
+positive embeddings by
+\begin{equation}
+    \bm{q}^{M}_i
+    = \frac{f_M(x_i)}{\lVert f_M(x_i)\rVert_2},
+    \qquad
+    \bm{p}^{M}_i
+    = \frac{f_M(y_i)}{\lVert f_M(y_i)\rVert_2}.
+    \label{eq:normalised-embeddings}
+\end{equation}
+The teacher and student dimensions, $d_{\teacher}$ and $d_{\student}$, need
+not be equal. The student is trained with the standard in-batch retrieval loss
+\begin{equation}
+    \lossret
+    = -\frac{1}{B}\sum_{i=1}^{B}
+    \log
+    \frac{
+        \exp\!\left((\bm{q}^{\student}_i)^{\top}
+        \bm{p}^{\student}_i / \tau\right)
+    }{
+        \sum_{j=1}^{B}
+        \exp\!\left((\bm{q}^{\student}_i)^{\top}
+        \bm{p}^{\student}_j / \tau\right)
+    },
+    \label{eq:retrieval-loss}
+\end{equation}
+where $\tau$ is the temperature.
+
+Some datasets contain several queries with the same target, as is common when
+class labels or short answers form the candidate set. Treating repeated
+targets as distinct graph vertices would make the topology depend on batch
+multiplicity rather than on the retrieval problem. We therefore assign every
+target a deterministic, task-local identity and retain one representative for
+each identity. This produces $C\leq B$ canonical candidates
+$\{c_j\}_{j=1}^{C}$, with normalised embeddings $\bm{c}^M_j$. All $B$ query
+vertices are retained. Candidate
+canonicalisation is used only to construct the structural target; the
+retrieval loss in Equation~\eqref{eq:retrieval-loss} remains defined on the
+original training rows.
+
+\subsection{Cross-Modal Filtration}
+\label{sec:method-filtration}
+
+For each model, we compute the rectangular cosine-distance matrix between the
+queries and canonical candidates,
+\begin{equation}
+    \distmat^{M}_{ij}
+    = 1-(\bm{q}^{M}_i)^{\top}\bm{c}^{M}_j,
+    \qquad
+    \distmat^{M}\in[0,2]^{B\times C}.
+    \label{eq:cross-modal-distance}
+\end{equation}
+Because the distances are computed separately in each representation space,
+Equation~\eqref{eq:cross-modal-distance} does not require a
+teacher-to-student projector.
+
+We interpret $\distmat^{M}$ as a complete weighted bipartite graph with the
+shared identity-aligned vertex set
+$\vertices=\queries\sqcup\candidates$, where
+$\queries=\{q_i\}_{i=1}^{B}$ and
+$\candidates=\{c_j\}_{j=1}^{C}$. At threshold $\varepsilon$, its filtration is
+\begin{equation}
+    \mathcal{G}^{M}_{\varepsilon}
+    = \left(
+        \vertices,
+        \edges^{M}_{\varepsilon}
+      \right),
+    \qquad
+    \edges^{M}_{\varepsilon}
+    = \left\{(q_i,c_j):
+      \distmat^{M}_{ij}\leq\varepsilon\right\}.
+    \label{eq:bipartite-filtration}
+\end{equation}
+The graph contains no query--query or candidate--candidate edges. Consequently,
+any connectivity within either side is induced exclusively by the
+cross-modal relation, for example through candidates shared by two queries.
+
+\subsection{Correspondence-Aware Persistent Connectivity}
+\label{sec:method-merge-times}
+
+For any two indexed vertices $a,b\in\vertices$, define their merge time as
+the first filtration threshold at which they belong to the same connected
+component:
+\begin{align}
+    \mergemat^{M}_{ab}
+    &= \inf\left\{\varepsilon:
+       a\text{ and }b\text{ are connected in }
+       \mathcal{G}^{M}_{\varepsilon}\right\} \\
+    &= \min_{\pi:a\rightsquigarrow b}
+       \max_{e\in\pi}\distmat^{M}_{e},
+    \label{eq:merge-time}
+\end{align}
+where $\pi$ ranges over all alternating paths between $a$ and $b$. Thus,
+$\mergemat^{M}$ is the cophenetic, or minimax, ultrametric of the cross-modal
+graph. Its three blocks have direct interpretations:
+$\mergemat_{q_i c_j}$ measures when a query joins a candidate, while
+$\mergemat_{q_i q_k}$ and $\mergemat_{c_j c_\ell}$ measure connectivity through
+shared vertices on the opposite side.
+
+The complete matrix can be recovered exactly from any minimum spanning tree
+(MST) of the weighted bipartite graph. In particular, for every pair $(a,b)$,
+$\mergemat^{M}_{ab}$ equals the largest edge weight on the unique MST path from
+$a$ to $b$. We exploit this property rather than explicitly sweeping over
+filtration thresholds.
+
+The distinction between this identity-preserving matrix and an ordinary $H_0$
+persistence barcode is essential. The finite $H_0$ barcode contains only the
+sorted multiset of the $B+C-1$ MST edge weights. It discards the identities of
+the vertices merged by those edges. For example, let $P$ be a non-identity
+permutation of candidate columns and suppose
+$\distmat^{\student}=\distmat^{\teacher}P$. The resulting graphs are
+isomorphic after permuting candidates and hence have identical $H_0$
+barcodes. Nevertheless, under the fixed teacher--student correspondence, the
+correct candidate attached to each query has changed. The entries of
+$\mergemat^{\student}$ detect this change.
+
+\subsection{Structural Distillation Objective}
+\label{sec:method-objective}
+
+Teacher and student share the vertex identities and ordering of $\vertices$,
+so their merge-time matrices can be compared entry by entry. Let
+$N=B+C$ and $\Omega=\{(a,b):1\leq a<b\leq N\}$. We define
+\begin{equation}
+    \losstopo
+    = \frac{1}{|\Omega|}
+      \sum_{(a,b)\in\Omega}
+      \left|
+        \mergemat^{\teacher}_{ab}
+        - \mergemat^{\student}_{ab}
+      \right|.
+    \label{eq:topology-loss}
+\end{equation}
+The default objective uses all three blocks of the merge-time matrix. A
+query--candidate-only variant, obtained by setting
+$\Omega=\queries\times\candidates$, serves as an ablation of the connectivity
+induced within each side.
+
+Equation~\eqref{eq:topology-loss} also admits a direct multiscale
+interpretation. Since every cosine distance lies in $[0,2]$, for any vertex
+pair,
+\begin{equation}
+    \left|\mergemat^{\teacher}_{ab}-\mergemat^{\student}_{ab}\right|
+    = \int_{0}^{2}
+      \left|
+      \mathbb{1}\!\left[\mergemat^{\teacher}_{ab}\leq\varepsilon\right]
+      -
+      \mathbb{1}\!\left[\mergemat^{\student}_{ab}\leq\varepsilon\right]
+      \right|\,\mathrm{d}\varepsilon.
+    \label{eq:multiscale-interpretation}
+\end{equation}
+Hence the loss is the average integrated disagreement between the
+identity-aligned teacher and student connectivity partitions across all
+filtration scales.
+
+The final training objective contains one structural coefficient:
+\begin{equation}
+    \mathcal{L}
+    = \lossret + \lambda_{\mathrm{topo}}\losstopo.
+    \label{eq:full-objective}
+\end{equation}
+Only the teacher's final normalised embeddings are required. The teacher
+remains frozen, and the method uses neither hidden states nor attention maps
+nor a learned projector.
+
+\subsection{Optimisation and Distributed Batching}
+\label{sec:method-optimisation}
+
+For each model, we first extract an MST from the detached distance matrix. A
+Kruskal pass over the MST assigns a bottleneck witness edge to every indexed
+vertex pair: whenever an edge joins components $A$ and $B$, that edge witnesses
+the merge time of all pairs in $A\times B$. Each entry of $\mergemat^M$ is then
+gathered from its witness in the original distance matrix. We treat the
+discrete MST routing as fixed during a backward pass, while gradients flow
+through the selected student distances. This gives the exact gradient almost
+everywhere. Distance ties can change the MST combinatorics, and a zero residual
+in the absolute-error objective introduces the usual subgradient ambiguity.
+
+In distributed training, embeddings and their identities are gathered across
+workers before constructing the graph, so the topology is defined on the
+global rather than per-device batch. Each global batch is restricted to one
+task, all query rows are preserved, and repeated candidate identities are
+collapsed as described in Section~\ref{sec:method-setup}. These constraints
+prevent unrelated task spaces and duplicate target vertices from changing the
+structural supervision.

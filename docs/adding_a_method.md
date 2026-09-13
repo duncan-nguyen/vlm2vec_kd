@@ -174,7 +174,7 @@ bash scripts/train/<yours>.sh --percent_data 0.01   # end-to-end smoke test
 
 A method with any real maths in it also gets its own
 `tools/misc/test_<method>.py`, running with no GPU and no model download -- see
-`test_cmtop.py` and `test_talas.py`. The properties worth pinning are the ones a
+`test_ours.py` and `test_talas.py`. The properties worth pinning are the ones a
 wrong implementation still descends on: which layers a term reads, which
 direction a gradient flows, and what the loss is at its analytic zero.
 
