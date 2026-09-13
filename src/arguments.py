@@ -386,9 +386,9 @@ class TrainingArguments(TrainingArguments):
         },
     )
     talas_lasd_detach_guide: bool = field(
-        default=True,
+        default=False,
         metadata={
-            "help": "treat the upper layer's relation matrix as a constant guide, so L_LASD propagates top-down as section 3.2 describes. False makes it a symmetric smoothness penalty, which is eq. 5 read literally"
+            "help": "stop the gradient into the upper layer's relation matrix in L_LASD. Off by default: eq. 5 of the paper has no stop-gradient, and TALAS is run as a baseline at its reported settings. True is an ablation, not the paper's method"
         },
     )
     talas_lasd_reduction: str = field(

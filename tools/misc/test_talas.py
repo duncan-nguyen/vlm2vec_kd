@@ -88,7 +88,7 @@ class Args:
     talas_lasd_weight = 1.0
     talas_num_tamd_layers = 2
     talas_num_lasd_layers = 0
-    talas_lasd_detach_guide = True
+    talas_lasd_detach_guide = False
     talas_lasd_reduction = "sum"
 
     def __init__(self, **overrides):
@@ -100,7 +100,7 @@ class Args:
 
 def make_batch(bs=4, dim=8, seq=3, teacher_dim=6, seed=0):
     g = torch.Generator().manual_seed(seed)
-    side = lambda: {  # noqa: E731
+    side = lambda: {
         "x": torch.randn(bs, seq, dim, generator=g),
         "attention_mask": torch.ones(bs, seq, dtype=torch.long),
     }
@@ -258,7 +258,10 @@ def lasd_checks():
     # Identical geometry at every layer -> nothing to align. Scaling a layer
     # leaves the cosine relation matrix untouched, so that must be free too.
     same = layers[:, :1, :].repeat(1, num_layers, 1)
-    check("L_LASD is 0 when every layer has the same geometry", float(criterion._lasd(same)) < 1e-6)
+    check(
+        "L_LASD is 0 when every layer has the same geometry",
+        float(criterion._lasd(same)) < 1e-6,
+    )
     scaled = same.clone()
     scaled[:, 2, :] *= 7.0
     check(
@@ -269,14 +272,18 @@ def lasd_checks():
 
     r = _relation_matrix(layers[:, 0, :])
     check("R is square, batch x batch", tuple(r.shape) == (n, n))
-    check("R has a unit diagonal", torch.allclose(r.diagonal(), torch.ones(n), atol=1e-5))
+    check(
+        "R has a unit diagonal", torch.allclose(r.diagonal(), torch.ones(n), atol=1e-5)
+    )
     check("R is symmetric", torch.allclose(r, r.t(), atol=1e-5))
 
     # sum vs mean differ by exactly N^2.
     _, mean_crit = build(talas_lasd_reduction="mean")
     check(
         "mean reduction is the sum divided by N^2",
-        torch.allclose(mean_crit._lasd(layers) * (n * n), criterion._lasd(layers), atol=1e-4),
+        torch.allclose(
+            mean_crit._lasd(layers) * (n * n), criterion._lasd(layers), atol=1e-4
+        ),
     )
 
     # Pair count is taken from the top.
@@ -321,7 +328,13 @@ def forward_checks():
     batch = make_batch()
     out = distiller(criterion, batch)
 
-    for key in ("loss", "contrastive_loss", "kd_loss", "talas_tamd_loss", "talas_lasd_loss"):
+    for key in (
+        "loss",
+        "contrastive_loss",
+        "kd_loss",
+        "talas_tamd_loss",
+        "talas_lasd_loss",
+    ):
         check(f"forward reports {key}", key in out)
 
     lam1, lam2, lam3 = 1.0, 0.75, 1.0
@@ -332,7 +345,9 @@ def forward_checks():
     )
     check(
         "loss = lambda_1 L_contrastive + kd_loss",
-        torch.allclose(out["loss"], lam1 * out["contrastive_loss"] + expected_kd, atol=1e-6),
+        torch.allclose(
+            out["loss"], lam1 * out["contrastive_loss"] + expected_kd, atol=1e-6
+        ),
     )
     check(
         "--kd_weight is not folded in a second time",
@@ -403,12 +418,17 @@ def sam_checks():
     )
 
     # eps = rho * T_w^2 g / || T_w g ||, with T_w = |w| + eta on 'weight' only.
-    t_w = {n: (before[n].abs() + 0.01 if "weight" in n else torch.ones_like(before[n]))
-           for n in before}
+    t_w = {
+        n: (before[n].abs() + 0.01 if "weight" in n else torch.ones_like(before[n]))
+        for n in before
+    }
     norm = torch.norm(torch.stack([(t_w[n] * grads[n]).norm() for n in before]))
     for n, p in model.named_parameters():
         want = before[n] + 0.5 * t_w[n] * t_w[n] * grads[n] / norm
-        check(f"ASAM perturbation matches the formula for {n}", torch.allclose(p, want, atol=1e-6))
+        check(
+            f"ASAM perturbation matches the formula for {n}",
+            torch.allclose(p, want, atol=1e-6),
+        )
 
     sam.restore()
     check(
@@ -428,7 +448,11 @@ def sam_checks():
     step = torch.norm(
         torch.stack([(p - before[n]).norm() for n, p in model.named_parameters()])
     )
-    check("SAM moves exactly rho in L2", abs(float(step) - 0.05) < 1e-6, f"{float(step):.6f}")
+    check(
+        "SAM moves exactly rho in L2",
+        abs(float(step) - 0.05) < 1e-6,
+        f"{float(step):.6f}",
+    )
 
     # Bias parameters are not scaled by |w| even under ASAM.
     model, sam = fresh()
@@ -469,13 +493,20 @@ def sam_checks():
 
     model = nn.Linear(4, 3)
     opt = torch.optim.SGD(model.parameters(), lr=0.0)
-    check("--sharpness_aware none builds no wrapper", build_sharpness_aware(opt, model, TA()) is None)
+    check(
+        "--sharpness_aware none builds no wrapper",
+        build_sharpness_aware(opt, model, TA()) is None,
+    )
     TA.sharpness_aware = "sam"
-    check("--sharpness_aware sam builds a non-adaptive wrapper",
-          build_sharpness_aware(opt, model, TA()).adaptive is False)
+    check(
+        "--sharpness_aware sam builds a non-adaptive wrapper",
+        build_sharpness_aware(opt, model, TA()).adaptive is False,
+    )
     TA.sharpness_aware = "asam"
-    check("--sharpness_aware asam builds an adaptive wrapper",
-          build_sharpness_aware(opt, model, TA()).adaptive is True)
+    check(
+        "--sharpness_aware asam builds an adaptive wrapper",
+        build_sharpness_aware(opt, model, TA()).adaptive is True,
+    )
     TA.sharpness_aware = "sharpness"
     try:
         build_sharpness_aware(opt, model, TA())

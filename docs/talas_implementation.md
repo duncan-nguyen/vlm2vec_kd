@@ -125,14 +125,16 @@ The per-layer pooled stack is all-gathered across ranks as one tensor, so the KD
 terms see the same widened batch as the contrastive term and `R_l` is built over
 the global batch on multi-GPU.
 
-### 2.5 Two judgment calls the paper leaves open
+### 2.5 `L_LASD` exactly as eq. 5
 
-**The `L_LASD` guide is detached** (`--talas_lasd_detach_guide`, default true).
-Eq. 5 is written symmetrically, but §3.2 describes propagating knowledge
-"sequentially from top to bottom" with the upper layer as a "dynamic guide".
-Without the detach the term is a symmetric smoothness penalty and the
-teacher-anchored top gets dragged *down* toward the untrained bottom, fighting
-`L_TAMD`. Pass `--talas_lasd_detach_guide false` for eq. 5 read literally.
+TALAS is a baseline here, so `L_LASD` follows the paper's equation rather than
+a reading of its prose.
+
+**No stop-gradient** (`--talas_lasd_detach_guide`, default false). Eq. 5 has
+none, so gradient reaches both `R_l` and `R_{l+1}`. §3.2's "dynamic guide"
+wording could be read as detaching the upper layer; that reading is available
+as `--talas_lasd_detach_guide true`, but it is an ablation, not the reported
+method.
 
 **`L_LASD` sums** (`--talas_lasd_reduction`, default `sum`). Eq. 5 spells out
 `‖A‖_F² = Σ_ij A_ij²`, which makes the term grow with `N²`. `mean` divides by
@@ -195,11 +197,11 @@ ms/step without ASAM, 375 with).
 | `--talas_lasd_weight` | `1.0` | 1 | `λ₃`, on `L_LASD` |
 | `--talas_num_tamd_layers` | `2` | 2 | `K`: top layers anchored to the teacher |
 | `--talas_num_lasd_layers` | `0` (all) | all | adjacent pairs in `L_LASD`, from the top |
-| `--talas_lasd_detach_guide` | `true` | — | top-down propagation vs. a symmetric penalty |
+| `--talas_lasd_detach_guide` | `false` | no stop-grad (eq. 5) | detach the upper layer's `R_{l+1}` (ablation) |
 | `--talas_lasd_reduction` | `sum` | sum | `‖·‖_F²` vs. its per-entry mean |
 | `--sharpness_aware` | `none` | asam | `none` / `sam` / `asam` |
 | `--sam_rho` | `0.5` | — | perturbation radius |
-| `--asam_eta` | `0.01` | 0.01 | the `|w| + η` floor |
+| `--asam_eta` | `0.01` | — | the `|w| + η` floor (ASAM's own default; not reported by TALAS) |
 
 `--kd_weight` is **not** read by TALAS: `λ₂` and `λ₃` weight the two KD terms
 directly.
