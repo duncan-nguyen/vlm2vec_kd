@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Build the teacher embedding cache that the rkd / uld / cmtop launchers reuse.
+# Build the teacher embedding cache that the rkd / uld / ours launchers reuse.
 # Run once per cell; every variant and seed afterwards then trains with no
 # teacher model in the process at all.
 #

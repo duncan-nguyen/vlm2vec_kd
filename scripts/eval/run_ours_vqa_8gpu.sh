@@ -1,14 +1,14 @@
 #!/bin/bash
-# Evaluate CM-Merge FastVLM VQA on all six MMEB benchmarks while keeping all
+# Evaluate Ours FastVLM VQA on all six MMEB benchmarks while keeping all
 # eight GPUs useful: six student subset jobs plus two teacher embedding jobs.
 set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/home/tensara/work/vlm_2_vec}"
-CKPT="${CKPT:-training/CMTop/fastvlm_vqa/cmmerge_seed42/checkpoint-final}"
+CKPT="${CKPT:-training/ours/fastvlm_vqa/ours_seed42/checkpoint-final}"
 MMEB_EVAL_DIR="${MMEB_EVAL_DIR:-/mnt/models/vlm_2_vec_storage/eval_images}"
 STUDENT_OUT="${STUDENT_OUT:-$CKPT/mmeb_vqa}"
 TEACHER_OUT="${TEACHER_OUT:-runs/teacher_emb_vqa}"
-TOPOLOGY_OUT="${TOPOLOGY_OUT:-runs/topo_cmmerge_seed42_vqa.json}"
+TOPOLOGY_OUT="${TOPOLOGY_OUT:-runs/topo_ours_seed42_vqa.json}"
 TOPOLOGY_BATCH_SIZE="${TOPOLOGY_BATCH_SIZE:-128}"
 HF_HOME="${HF_HOME:-/mnt/models/vlm_2_vec_storage/hf_cache}"
 HF_TOKEN_FILE="${HF_TOKEN_FILE:-/home/tensara/.hf_token_r3}"
@@ -28,9 +28,9 @@ if [[ -z "${HF_TOKEN:-}" ]] && [[ -r "$HF_TOKEN_FILE" ]]; then
 fi
 
 mkdir -p logs "$STUDENT_OUT" "$TEACHER_OUT" "$(dirname "$TOPOLOGY_OUT")"
-PIPELINE_LOG=logs/cmtop_vqa_eval_8gpu.log
-DOWNLOAD_LOG=logs/cmtop_vqa_eval_download.log
-TOPOLOGY_LOG=logs/cmtop_vqa_eval_topology.log
+PIPELINE_LOG=logs/ours_vqa_eval_8gpu.log
+DOWNLOAD_LOG=logs/ours_vqa_eval_download.log
+TOPOLOGY_LOG=logs/ours_vqa_eval_topology.log
 
 stamp() {
   printf '[%s] %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" "$*" | tee -a "$PIPELINE_LOG"

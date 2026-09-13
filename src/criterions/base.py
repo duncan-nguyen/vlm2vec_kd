@@ -116,6 +116,9 @@ class DistillCriterion(nn.Module):
     #: that needs the teacher's hidden states or attentions instead should set
     #: this False and encode the teacher itself.
     fetch_teacher_reps = True
+    #: Weight on the in-batch contrastive term. A loss-term ablation sets it to
+    #: 0 to train on the KD terms alone; the contrastive loss is still logged.
+    contrastive_loss_weight = 1.0
 
     def __init__(self, args):
         super().__init__()
@@ -182,7 +185,10 @@ class DistillCriterion(nn.Module):
 
         out = dict(terms)
         out["contrastive_loss"] = contrastive_loss
-        out["loss"] = contrastive_loss + self.kd_loss_weight * terms["kd_loss"]
+        loss = self.kd_loss_weight * terms["kd_loss"]
+        if self.contrastive_loss_weight:
+            loss = self.contrastive_loss_weight * contrastive_loss + loss
+        out["loss"] = loss
         return out
 
 

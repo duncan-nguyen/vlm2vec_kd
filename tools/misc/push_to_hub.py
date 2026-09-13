@@ -2,7 +2,7 @@
 """Upload a checkpoint directory to the Hugging Face Hub.
 
     python tools/misc/push_to_hub.py <folder> --track baseline --path-in-repo talas/FastVLM-0.5B/cls/talas_seed42
-    python tools/misc/push_to_hub.py <folder> --repo nqdhocai/vlm2vec-kd-ours --path-in-repo cmtop/...
+    python tools/misc/push_to_hub.py <folder> --repo nqdhocai/vlm2vec-kd-ours --path-in-repo ours/...
 
 Prefer `--push_to_hub` on the training command: the run uploads
 `checkpoint-final` into the right repo and directory itself when it finishes,
@@ -57,7 +57,7 @@ def main():
     ap.add_argument(
         "--path-in-repo",
         default="",
-        help="directory inside the repo, e.g. cmtop/FastVLM-0.5B/vqa/cmmerge_seed42. "
+        help="directory inside the repo, e.g. ours/FastVLM-0.5B/vqa/ours_seed42. "
         "The trainer's own layout is <kd_loss_type>/<student>/<task>/<run>",
     )
     ap.add_argument("--private", action="store_true", help="create the repo private")

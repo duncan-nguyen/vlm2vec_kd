@@ -1,8 +1,8 @@
-"""Correspondence-aware cross-modal merge distillation (CM-Merge).
+"""Correspondence-aware cross-modal merge distillation (Ours).
 
 Implements ``docs/cross_modal_topological_distillation.md``:
 
-    L = L_retrieval + cmtop_weight * mean_{a<b} |U_t[a,b] - U_s[a,b]|
+    L = L_retrieval + ours_weight * mean_{a<b} |U_t[a,b] - U_s[a,b]|
 
 ``U[a,b]`` is the threshold at which indexed vertices ``a`` and ``b`` first
 become connected in the bipartite query-candidate filtration. It preserves the
@@ -12,9 +12,11 @@ candidate permutation can retain the old H0 barcode exactly but changes ``U``.
 Only the teacher's final embeddings are read -- no hidden states, no attention
 maps -- which is the black-box property the brief asks to preserve.
 
-The no-teacher control is this same criterion with ``--cmtop_weight 0``: the
+The no-teacher control is this same criterion with ``--ours_weight 0``: the
 retrieval objective alone, under exactly the same sampler and batch
-construction, which is what makes the two rows comparable.
+construction, which is what makes the two rows comparable. The opposite row of
+the loss-term ablation, ``--ours_retrieval_loss False``, drops the retrieval
+objective and trains on ``ours_weight * L_topo`` alone.
 """
 
 import torch
@@ -24,30 +26,36 @@ from src.topology import bipartite_merge_matrix, cosine_distance_matrix
 
 
 class CrossModalTopologyLoss(DistillCriterion):
-    """``--kd_loss_type cmtop``. See the module docstring."""
+    """``--kd_loss_type ours``. See the module docstring."""
 
     def __init__(self, args):
         super().__init__(args)
         # The base class computes `contrastive + kd_loss_weight * kd_loss` and
-        # scales `kd_loss_weight` from --kd_weight. CM-Merge has exactly one
+        # scales `kd_loss_weight` from --kd_weight. Ours has exactly one
         # term with its own weight, so neutralise the outer scale rather than
         # multiplying the two together.
         self.kd_loss_weight = 1.0
-        self.cmtop_weight = args.cmtop_weight
-        self.reduction = args.cmtop_reduction
-        self.merge_block = getattr(args, "cmtop_merge_block", "all")
-        self.require_task_homogeneous = getattr(args, "cmtop_task_homogeneous", True)
+        self.ours_weight = args.ours_weight
+        if not getattr(args, "ours_retrieval_loss", True):
+            self.contrastive_loss_weight = 0.0
+        self.reduction = args.ours_reduction
+        self.merge_block = getattr(args, "ours_merge_block", "all")
+        self.require_task_homogeneous = getattr(args, "ours_task_homogeneous", True)
         self.deduplicate_candidates = getattr(
-            args, "cmtop_deduplicate_candidates", True
+            args, "ours_deduplicate_candidates", True
         )
 
         if self.reduction not in {"mean", "sum"}:
             raise ValueError(
-                f"--cmtop_reduction must be mean or sum, got {self.reduction!r}"
+                f"--ours_reduction must be mean or sum, got {self.reduction!r}"
             )
         if self.merge_block not in {"all", "cross"}:
             raise ValueError(
-                f"--cmtop_merge_block must be all or cross, got {self.merge_block!r}"
+                f"--ours_merge_block must be all or cross, got {self.merge_block!r}"
+            )
+        if not self.contrastive_loss_weight and self.ours_weight <= 0:
+            raise ValueError(
+                "--ours_retrieval_loss False with --ours_weight 0 leaves no loss to train on"
             )
 
     # ------------------------------------------------------------------ utils
@@ -86,16 +94,16 @@ class CrossModalTopologyLoss(DistillCriterion):
             return
         if ctx.task_ids is None:
             raise ValueError(
-                "--cmtop_task_homogeneous needs per-row task ids, but the batch "
-                "carries none; pass --cmtop_task_homogeneous False to run "
-                "CM-Merge on a mixed-task relation deliberately"
+                "--ours_task_homogeneous needs per-row task ids, but the batch "
+                "carries none; pass --ours_task_homogeneous False to run "
+                "Ours on a mixed-task relation deliberately"
             )
         if torch.any(ctx.task_ids < 0):
-            raise ValueError("CM-Merge received an invalid placeholder task id")
+            raise ValueError("Ours received an invalid placeholder task id")
         tasks = torch.unique(ctx.task_ids)
         if tasks.numel() != 1:
             raise ValueError(
-                "CM-Merge requires one task per gathered batch, got task ids "
+                "Ours requires one task per gathered batch, got task ids "
                 f"{tasks.detach().cpu().tolist()}"
             )
 
@@ -108,7 +116,7 @@ class CrossModalTopologyLoss(DistillCriterion):
         # Stable hashes legitimately span signed int64, so only -1 is reserved;
         # negative values other than -1 are valid identities.
         if torch.any(ids == -1):
-            raise ValueError("CM-Merge received an invalid placeholder candidate id")
+            raise ValueError("Ours received an invalid placeholder candidate id")
 
         seen = set()
         keep = []
@@ -126,7 +134,7 @@ class CrossModalTopologyLoss(DistillCriterion):
     # ----------------------------------------------------------------- kd
 
     def kd_loss(self, ctx: CriterionContext):
-        """Compute the CM-Merge term for one batch.
+        """Compute the Ours term for one batch.
 
         Encoding, gathering and the contrastive loss are handled by
         :class:`~src.criterions.base.DistillCriterion`.
@@ -135,7 +143,7 @@ class CrossModalTopologyLoss(DistillCriterion):
         merge_loss = ctx.zeros()
         unique_candidates = ctx.student_pos.size(0)
 
-        if self.cmtop_weight > 0:
+        if self.ours_weight > 0:
             self._validate_task(ctx)
             student_pos, teacher_pos, unique_candidates = self._relation_candidates(ctx)
             merge_loss = self._merge_loss(
@@ -149,8 +157,8 @@ class CrossModalTopologyLoss(DistillCriterion):
             device=student_qry.device,
         )
         return {
-            "kd_loss": self.cmtop_weight * merge_loss,
-            "cmmerge_loss": merge_loss,
+            "kd_loss": self.ours_weight * merge_loss,
+            "topo_loss": merge_loss,
             "num_unique_candidates": torch.as_tensor(
                 unique_candidates, dtype=torch.float32, device=student_qry.device
             ),

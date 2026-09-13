@@ -16,7 +16,7 @@ Layout
 Two repos, not one per run: the proposed methods in one, the baselines they are
 compared against in the other, each run its own directory inside::
 
-    nqdhocai/vlm2vec-kd-ours/       cmtop/FastVLM-0.5B/vqa/cmmerge_seed42/
+    nqdhocai/vlm2vec-kd-ours/       ours/FastVLM-0.5B/vqa/ours_seed42/
     nqdhocai/vlm2vec-kd-baselines/  talas/FastVLM-0.5B/cls/talas_seed42/
                                     span_propose_attn/FastVLM-0.5B/cls/hierd_fastvlm_cls/
 
@@ -45,7 +45,7 @@ TRACK_REPOS = {
 # is a published method being reproduced for comparison -- TALAS and HieRD have
 # their papers in `docs/baseline methods/`. A new proposal goes here; a new
 # competitor needs no change.
-OURS_METHODS = {"cmtop"}
+OURS_METHODS = {"ours"}
 
 # The embedding dumps `tools/eval_mmeb.py` leaves next to its scores: one pickle
 # per subset per side, gigabytes in total, and reproducible from the weights.
@@ -114,7 +114,7 @@ def run_metadata(model_args, data_args, training_args, path_in_repo):
     distillation: without this, two directories differing only in `--kd_weight`
     are indistinguishable once they are sitting next to thirty others.
     """
-    return {
+    metadata = {
         "path_in_repo": path_in_repo,
         "track": resolve_track(training_args),
         "kd_loss_type": training_args.kd_loss_type,
@@ -140,6 +140,12 @@ def run_metadata(model_args, data_args, training_args, path_in_repo):
         "sharpness_aware": training_args.sharpness_aware,
         "output_dir": training_args.output_dir,
     }
+    if training_args.kd_loss_type in OURS_METHODS:
+        metadata["ours_weight"] = getattr(training_args, "ours_weight", None)
+        metadata["ours_retrieval_loss"] = getattr(
+            training_args, "ours_retrieval_loss", None
+        )
+    return metadata
 
 
 def write_run_metadata(checkpoint_dir, metadata):

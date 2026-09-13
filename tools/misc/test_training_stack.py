@@ -2,7 +2,7 @@
 
     python tools/misc/test_training_stack.py
 
-Covers the pieces that `test_cmtop.py` and `test_teacher_cache.py` do not:
+Covers the pieces that `test_ours.py` and `test_teacher_cache.py` do not:
 
 * the criterion registry and its lazy imports,
 * `DistillCriterion`'s combination of the contrastive and KD terms,
@@ -130,7 +130,7 @@ def registry_checks():
     except ValueError as exc:
         check(
             "unknown --kd_loss_type lists the available methods",
-            "cmtop" in str(exc) and "em_kd" in str(exc),
+            "ours" in str(exc) and "em_kd" in str(exc),
         )
 
     # Importing the package must not drag in the heavy optional dependencies.

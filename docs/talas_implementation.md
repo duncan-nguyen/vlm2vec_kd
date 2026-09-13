@@ -109,7 +109,7 @@ Each batch has a query side and a positive side. `L_TAMD` and `L_LASD` are
 computed on each and averaged, which keeps their magnitude the same as a
 one-stream run and keeps `R_l` a within-modality relation matrix. (Mixing query
 and candidate rows into one matrix would make it a cross-modal claim, which is
-CMTop's subject, not TALAS's.)
+our method's subject, not TALAS's.)
 
 ### 2.4 Per-layer pooling is layout-agnostic
 

@@ -7,7 +7,7 @@ C the filtration is the bipartite graph
 
     G_eps = (Q u C, {(q_i, c_j) : D_ij <= eps}),    D_ij = 1 - cos(q_i, c_j)
 
-CM-Merge compares the *identity-preserving merge hierarchy* of the teacher's and
+Ours compares the *identity-preserving merge hierarchy* of the teacher's and
 the student's ``G_eps``.  For vertices ``a`` and ``b`` its merge time is the
 minimax distance
 

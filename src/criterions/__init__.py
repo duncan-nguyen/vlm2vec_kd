@@ -4,7 +4,7 @@ One method = one entry in :data:`src.criterions.registry.CRITERIONS`. See
 docs/adding_a_method.md.
 
 This module deliberately imports no criterion at import time. `span_propose*`
-pull in spacy, numba and tslearn; a CMTop or EM-KD run has no use for any of
+pull in spacy, numba and tslearn; an `ours` or EM-KD run has no use for any of
 them and used to pay both the import time and the hard dependency. The module
 for the selected `--kd_loss_type` is imported when the criterion is built.
 """

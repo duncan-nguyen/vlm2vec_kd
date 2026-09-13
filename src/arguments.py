@@ -317,32 +317,38 @@ class TrainingArguments(TrainingArguments):
             "help": "min_samples for DBSCAN when clustering teacher features for span loss"
         },
     )
-    # CM-Merge (kd_loss_type="cmtop"); see docs/cmtop_implementation.md
-    cmtop_weight: float = field(
+    # Ours (kd_loss_type="ours"); see docs/ours_implementation.md
+    ours_weight: float = field(
         default=1.0,
         metadata={
-            "help": "lambda_merge: weight of the CM-Merge term. 0 is the no-teacher control"
+            "help": "lambda_topo: weight of the structural term L_topo. 0 is the no-teacher control"
         },
     )
-    cmtop_reduction: str = field(
+    ours_retrieval_loss: bool = field(
+        default=True,
+        metadata={
+            "help": "keep L_ret in the objective. False trains on ours_weight * L_topo alone (loss-term ablation); the contrastive loss is still logged"
+        },
+    )
+    ours_reduction: str = field(
         default="mean",
         metadata={
             "help": "mean (batch-size independent) or sum over indexed vertex pairs"
         },
     )
-    cmtop_merge_block: str = field(
+    ours_merge_block: str = field(
         default="all",
         metadata={
-            "help": "CM-Merge pair block: all identity-aligned vertex pairs (main) or cross for query-candidate pairs only"
+            "help": "L_topo pair block: all identity-aligned vertex pairs (main) or cross for query-candidate pairs only"
         },
     )
-    cmtop_task_homogeneous: bool = field(
+    ours_task_homogeneous: bool = field(
         default=True,
         metadata={
-            "help": "form each global CMTop batch from one task and validate the gathered graph"
+            "help": "form each global Ours batch from one task and validate the gathered graph"
         },
     )
-    cmtop_deduplicate_candidates: bool = field(
+    ours_deduplicate_candidates: bool = field(
         default=True,
         metadata={
             "help": "collapse repeated candidate identities before constructing the cross-modal relation"

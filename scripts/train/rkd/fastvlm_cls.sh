@@ -18,7 +18,7 @@ MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
 #   TEACHER_CACHE=cache/b3_qwen2_2b_cls bash scripts/data/precompute_teacher_embeddings.sh
 #   TEACHER_CACHE=cache/b3_qwen2_2b_cls bash scripts/train/rkd/fastvlm_cls.sh
 #
-# The same cache serves cmtop, contrastive_rkd and universal_logit. Leave unset
+# The same cache serves ours, contrastive_rkd and universal_logit. Leave unset
 # to run the teacher live.
 TEACHER_CACHE="${TEACHER_CACHE:-}"
 CACHE_FLAGS=()

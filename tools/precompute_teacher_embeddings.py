@@ -2,7 +2,7 @@
 
 The teacher never changes and the dataset applies no augmentation, so its final
 embedding for a sample is a pure function of the dataset index. A criterion that
-reads nothing else -- `cmtop`, `contrastive_rkd`, `universal_logit` -- can then
+reads nothing else -- `ours`, `contrastive_rkd`, `universal_logit` -- can then
 train with no teacher model in the process at all: no teacher forward, no teacher
 image preprocessing, and several GB of device memory freed for a larger batch.
 

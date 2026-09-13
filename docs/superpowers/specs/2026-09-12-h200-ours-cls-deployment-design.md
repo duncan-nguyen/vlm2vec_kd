@@ -1,9 +1,9 @@
-# H200 CM-Merge CLS deployment design
+# H200 Ours CLS deployment design
 
 ## Goal
 
 Migrate the current `vlm2vec_kd` workspace to
-`H200_ANNP36:/home/annp36/work/vlm_2_vec` and start the main CM-Merge
+`H200_ANNP36:/home/annp36/work/vlm_2_vec` and start the main Ours
 classification run for teacher `raghavlite/B3_Qwen2_2B` and student
 `apple/FastVLM-0.5B` on all eight H200 GPUs.
 
@@ -29,7 +29,7 @@ change in `tools/eval_mmeb.py`.
 
 ## Training configuration
 
-- Method: `VARIANT=cmmerge` (`--kd_loss_type cmtop`, merge mode)
+- Method: `VARIANT=ours` (`--kd_loss_type ours`, merge mode)
 - Task/subsets: CLS over `ImageNet_1K`, `N24News`, `HatefulMemes`, `VOC2007`,
   and `SUN397`
 - Teacher: `raghavlite/B3_Qwen2_2B`, Qwen2-VL backbone, EOS pooling, normalized
@@ -42,15 +42,15 @@ change in `tools/eval_mmeb.py`.
   \]
 - Epochs: 1; learning rate: `1e-4`; seed: 42
 - Teacher cache: `cache/b3_qwen2_2b_fastvlm_cls_v2`
-- Main output: `training/CMTop/cmmerge_fastvlm_cls_b3qwen2_2b_8xh200_seed42`
-- Main log: `logs/cmtop_fastvlm_cls_b3qwen2_2b_8xh200_seed42.log`
+- Main output: `training/ours/ours_fastvlm_cls_b3qwen2_2b_8xh200_seed42`
+- Main log: `logs/ours_fastvlm_cls_b3qwen2_2b_8xh200_seed42.log`
 
 The selected teacher cache is complete and matches the model, subset order,
 full-data fraction, EOS pooling, normalization, and 448-pixel image setting.
 
 ## Validation and launch sequence
 
-1. Run `tools/check_paper_settings.py` and the three CM-Merge/cache/training-stack
+1. Run `tools/check_paper_settings.py` and the three Ours/cache/training-stack
    tests in the remote `.venv`.
 2. Run a disposable eight-GPU smoke job at a small data fraction, with hub push
    and post-training evaluation disabled.

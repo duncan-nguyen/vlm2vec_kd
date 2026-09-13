@@ -3,7 +3,7 @@
 The teacher is frozen and the distillation dataset applies no augmentation, so
 its embedding for a sample is a pure function of the dataset index. For a
 criterion that reads nothing but the final embedding -- the black-box family:
-`cmtop`, `contrastive_rkd`, `universal_logit` -- the teacher forward is therefore
+`ours`, `contrastive_rkd`, `universal_logit` -- the teacher forward is therefore
 recomputed identically on every step of every run.
 
 Precomputing it once (`tools/precompute_teacher_embeddings.py`) removes, per
@@ -18,7 +18,7 @@ training step:
 
 This is the only one of the obvious speedups that survives contact with the
 vendored backbones in `src/model/vlm_backbone/`; see the "What did *not* work"
-section of docs/cmtop_implementation.md for the two that do not.
+section of docs/ours_implementation.md for the two that do not.
 
 Layout on disk::
 

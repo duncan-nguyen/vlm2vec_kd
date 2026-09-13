@@ -1,4 +1,4 @@
-"""Metrics for the CM-Merge evaluation protocol.
+"""Metrics for the Ours evaluation protocol.
 
 Section 4 of ``docs/cross_modal_topological_distillation.md`` asks for two
 things beyond MMEB accuracy: a *structural discrepancy* between the teacher's

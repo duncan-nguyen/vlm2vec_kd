@@ -1,7 +1,7 @@
 """Report how much of the teacher's retrieval structure a student preserves.
 
 This is the "topology discrepancy + neighborhood preservation" column of the
-CMTop experiment plan (docs/cross_modal_topological_distillation.md, section 4).
+Ours experiment plan (docs/cross_modal_topological_distillation.md, section 4).
 It reads the query/target embedding dumps that `tools/eval_mmeb.py` already
 writes to `--encode_output_path`, so no re-encoding is needed:
 

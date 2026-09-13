@@ -1,6 +1,6 @@
-"""Self-checks for CM-Merge.
+"""Self-checks for Ours.
 
-Run from the repo root: `python tools/misc/test_cmtop.py`. Needs only torch,
+Run from the repo root: `python tools/misc/test_ours.py`. Needs only torch,
 numpy and scipy -- no model download, no GPU.
 
 Each check re-derives a quantity from its definition (all-pairs minimax paths by
@@ -50,7 +50,7 @@ def minimax_connectivity_reference(dist):
 
 
 def load_criterion_module():
-    """Import the CMTop criterion without going through `src.criterions`.
+    """Import the Ours criterion without going through `src.criterions`.
 
     That package's `__init__` pulls in spacy/numba/tslearn for the other
     criteria, none of which this check needs.
@@ -65,7 +65,7 @@ def load_criterion_module():
         "criterions",
         "cross_modal_topology.py",
     )
-    spec = importlib.util.spec_from_file_location("cmtop_criterion", path)
+    spec = importlib.util.spec_from_file_location("ours_criterion", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -123,11 +123,12 @@ def _args(**overrides):
 
     base = dict(
         kd_weight=0.0,
-        cmtop_weight=1.0,
-        cmtop_reduction="mean",
-        cmtop_merge_block="all",
-        cmtop_task_homogeneous=True,
-        cmtop_deduplicate_candidates=True,
+        ours_weight=1.0,
+        ours_retrieval_loss=True,
+        ours_reduction="mean",
+        ours_merge_block="all",
+        ours_task_homogeneous=True,
+        ours_deduplicate_candidates=True,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -157,32 +158,32 @@ def criterion_checks():
     }
 
     for block in ("all", "cross"):
-        out = module.CrossModalTopologyLoss(_args(cmtop_merge_block=block))(
+        out = module.CrossModalTopologyLoss(_args(ours_merge_block=block))(
             distiller, inputs
         )
         check(
             f"criterion runs and stays finite (merge_block={block})",
             all(torch.isfinite(v).all() for v in out.values())
-            and float(out["cmmerge_loss"].detach()) > 0,
+            and float(out["topo_loss"].detach()) > 0,
         )
 
     check(
-        "unknown --cmtop_reduction is rejected",
-        _raises(lambda: module.CrossModalTopologyLoss(_args(cmtop_reduction="max"))),
+        "unknown --ours_reduction is rejected",
+        _raises(lambda: module.CrossModalTopologyLoss(_args(ours_reduction="max"))),
     )
     check(
-        "unknown --cmtop_merge_block is rejected",
-        _raises(lambda: module.CrossModalTopologyLoss(_args(cmtop_merge_block="tri"))),
+        "unknown --ours_merge_block is rejected",
+        _raises(lambda: module.CrossModalTopologyLoss(_args(ours_merge_block="tri"))),
     )
 
-    # CM-Merge needs no teacher/student projector: it only ever compares
+    # Ours needs no teacher/student projector: it only ever compares
     # distances, which are dimension-free. A missing projector must not matter.
     check(
-        "CM-Merge runs without any projector",
+        "Ours runs without any projector",
         float(
             module.CrossModalTopologyLoss(_args())(
                 _FakeDistiller(student, teacher, projectors=None), inputs
-            )["cmmerge_loss"].detach()
+            )["topo_loss"].detach()
         )
         > 0,
     )
@@ -204,13 +205,30 @@ def criterion_checks():
 
     # The no-teacher control has to be reachable from the flags alone, so that
     # it runs under exactly this sampler and batch construction.
-    student_only = module.CrossModalTopologyLoss(_args(cmtop_weight=0.0))(
+    student_only = module.CrossModalTopologyLoss(_args(ours_weight=0.0))(
         distiller, inputs
     )
     check(
-        "--cmtop_weight 0 leaves the contrastive loss alone",
+        "--ours_weight 0 leaves the contrastive loss alone",
         torch.allclose(student_only["loss"], student_only["contrastive_loss"])
         and float(student_only["kd_loss"].detach()) == 0.0,
+    )
+
+    topo_only = module.CrossModalTopologyLoss(_args(ours_retrieval_loss=False))(
+        distiller, inputs
+    )
+    check(
+        "--ours_retrieval_loss False trains on the L_topo term alone",
+        torch.allclose(topo_only["loss"], topo_only["kd_loss"])
+        and float(topo_only["contrastive_loss"].detach()) > 0,
+    )
+    check(
+        "dropping both loss terms is rejected",
+        _raises(
+            lambda: module.CrossModalTopologyLoss(
+                _args(ours_retrieval_loss=False, ours_weight=0.0)
+            )
+        ),
     )
 
     identical = {
@@ -223,9 +241,9 @@ def criterion_checks():
         _FakeDistiller(teacher, teacher), identical
     )
     check(
-        "distilling a model from itself gives zero CM-Merge loss",
-        float(out["cmmerge_loss"].detach()) == 0.0,
-        f"{float(out['cmmerge_loss'].detach()):.2e}",
+        "distilling a model from itself gives zero Ours loss",
+        float(out["topo_loss"].detach()) == 0.0,
+        f"{float(out['topo_loss'].detach()):.2e}",
     )
 
     duplicate_inputs = dict(inputs)
@@ -252,7 +270,7 @@ def criterion_checks():
     # rather than silently skipping the homogeneity guarantee.
     no_metadata = {k: v for k, v in inputs.items() if k != "task_ids"}
     check(
-        "a batch without task ids is rejected under --cmtop_task_homogeneous",
+        "a batch without task ids is rejected under --ours_task_homogeneous",
         _raises(
             lambda: module.CrossModalTopologyLoss(_args())(distiller, no_metadata),
             ValueError,
@@ -383,7 +401,7 @@ def main():
     start.backward()
     start = float(start.detach())
     check(
-        "CM-Merge routes a finite non-zero gradient through witness edges",
+        "Ours routes a finite non-zero gradient through witness edges",
         merge_student.grad is not None
         and torch.isfinite(merge_student.grad).all()
         and merge_student.grad.abs().sum() > 0,
@@ -401,7 +419,7 @@ def main():
     # therefore converges to whatever tree structure it started from -- here to
     # ~35% of the initial loss, with 5 of 15 MST edges shared with the teacher.
     check(
-        "gradient descent drives the CM-Merge loss down",
+        "gradient descent drives the Ours loss down",
         float(loss.detach()) < 0.5 * start,
         f"{start:.3e} -> {float(loss.detach()):.3e}",
     )

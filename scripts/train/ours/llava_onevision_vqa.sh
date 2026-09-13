@@ -1,20 +1,21 @@
 #!/bin/bash
-# CMTop -- LLaVA-OneVision-0.5B, VQA
-# CM-Merge: distil correspondence-aware multiscale connectivity of the
+# Ours -- LLaVA-OneVision-0.5B, VQA
+# Ours: distil correspondence-aware multiscale connectivity of the
 # query-candidate relation rather than an identity-agnostic persistence barcode.
 #
-# Method:  kd_loss_type cmtop
+# Method:  kd_loss_type ours
 # Teacher: raghavlite/B3_Qwen2_2B (qwen2_vl)  ->  student LLaVA-OneVision-0.5B (llava_onevision)
 # Config:  paper Table 6 for this student, so the ablation is comparable to the
-#          other methods; see scripts/train/cmtop/README.md and
-#          docs/cmtop_implementation.md.
+#          other methods; see scripts/train/ours/README.md and
+#          docs/ours_implementation.md.
 #
-# One script, two rows: the method and its no-teacher control.
+# One script, three rows: the method, its no-teacher control and its
+# L_topo-only ablation.
 # Pick one with VARIANT and vary SEED:
 #
-#   VARIANT=cmmerge SEED=42 bash scripts/train/cmtop/llava_onevision_vqa.sh
-#   for v in cmmerge student_only; do
-#     for s in 42 43 44; do VARIANT=$v SEED=$s bash scripts/train/cmtop/llava_onevision_vqa.sh; done
+#   VARIANT=ours SEED=42 bash scripts/train/ours/llava_onevision_vqa.sh
+#   for v in ours student_only; do
+#     for s in 42 43 44; do VARIANT=$v SEED=$s bash scripts/train/ours/llava_onevision_vqa.sh; done
 #   done
 
 set -euo pipefail
@@ -23,7 +24,7 @@ NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-1}"
 TRAIN_SCRIPT="tools/train_distill_no_deepspeed.py"
 
 # Nơi chứa ảnh MMEB-train. Ghi đè mà không cần sửa file:
-#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/cmtop/llava_onevision_vqa.sh
+#   MMEB_TRAIN_DIR=/duong/dan/khac bash scripts/train/ours/llava_onevision_vqa.sh
 MMEB_TRAIN_DIR="${MMEB_TRAIN_DIR:-./vlm2vec_train/MMEB-train}"
 SEED="${SEED:-42}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
@@ -34,7 +35,7 @@ BATCH_SIZE="${BATCH_SIZE:-8}"
 #
 #   TASK=vqa STUDENT=llava_onevision TEACHER_CACHE=cache/b3_qwen2_2b_llava_onevision_vqa \
 #     bash scripts/data/precompute_teacher_embeddings.sh
-#   TEACHER_CACHE=cache/b3_qwen2_2b_llava_onevision_vqa bash scripts/train/cmtop/llava_onevision_vqa.sh
+#   TEACHER_CACHE=cache/b3_qwen2_2b_llava_onevision_vqa bash scripts/train/ours/llava_onevision_vqa.sh
 #
 # The cache is fingerprinted against the teacher, the subset list and the image
 # settings, so this cell needs its own -- leave TEACHER_CACHE unset to run the
@@ -45,25 +46,27 @@ if [ -n "$TEACHER_CACHE" ]; then
   CACHE_FLAGS=(--teacher_embedding_cache "$TEACHER_CACHE")
 fi
 
-VARIANT="${VARIANT:-cmmerge}"
+VARIANT="${VARIANT:-ours}"
 
 # lambda_Merge. Tune once on development data, then freeze across tasks/seeds.
-CMTOP_WEIGHT="${CMTOP_WEIGHT:-1.0}"
+OURS_WEIGHT="${OURS_WEIGHT:-1.0}"
 
 # Each variant is one row of the experiment plan. Only the KD-side flags differ.
-# CM-Merge compares distances, never embeddings, so it needs no teacher/student
+# Ours compares distances, never embeddings, so it needs no teacher/student
 # projector -- declaring one without using it makes DDP abort on multi-GPU.
 case "$VARIANT" in
-  cmmerge)          # the method
-    KD_FLAGS=(--cmtop_weight "$CMTOP_WEIGHT") ;;
+  ours)          # the method
+    KD_FLAGS=(--ours_weight "$OURS_WEIGHT") ;;
   student_only)     # the no-teacher control, same sampler and batch construction
-    KD_FLAGS=(--cmtop_weight 0.0) ;;
+    KD_FLAGS=(--ours_weight 0.0) ;;
+  topo_only)        # L_topo alone: the retrieval loss is dropped, lambda unchanged
+    KD_FLAGS=(--ours_weight "$OURS_WEIGHT" --ours_retrieval_loss False) ;;
   *)
-    echo "unknown VARIANT '$VARIANT'; expected: cmmerge student_only" >&2
+    echo "unknown VARIANT '$VARIANT'; expected: ours student_only topo_only" >&2
     exit 1 ;;
 esac
 
-OUTPUT_DIR="${OUTPUT_DIR:-training/CMTop/llava_onevision_vqa/${VARIANT}_seed${SEED}}"
+OUTPUT_DIR="${OUTPUT_DIR:-training/ours/llava_onevision_vqa/${VARIANT}_seed${SEED}}"
 echo "variant=$VARIANT seed=$SEED topology_batch=$((BATCH_SIZE * NUM_GPUS_PER_NODE)) -> $OUTPUT_DIR"
 
 torchrun --standalone \
@@ -100,7 +103,7 @@ torchrun --standalone \
     --teacher_normalize True \
     --lr_scheduler_type "cosine" \
     --warmup_ratio 0.03 \
-    --kd_loss_type "cmtop" \
+    --kd_loss_type "ours" \
     --image_resolution "336" \
     --projector_lr 5e-4 \
     "${CACHE_FLAGS[@]+"${CACHE_FLAGS[@]}"}" \
@@ -108,7 +111,7 @@ torchrun --standalone \
     "$@"
 # Anything after the script name is forwarded to the trainer and, because these
 # are argparse options, a repeat overrides what is set above. Handy for a smoke
-# test:  bash scripts/train/cmtop/llava_onevision_vqa.sh --percent_data 0.01 \
+# test:  bash scripts/train/ours/llava_onevision_vqa.sh --percent_data 0.01 \
 #            --push_to_hub False --eval_after_train False
 # Those last two matter: a finished run uploads itself and evaluates by
 # default, and a 1% run is not a result worth collecting.

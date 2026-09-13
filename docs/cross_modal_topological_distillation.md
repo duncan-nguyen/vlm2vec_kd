@@ -1,6 +1,6 @@
 # Research Brief: Correspondence-Aware Cross-Modal Topological Distillation
 
-> **Working name:** CM-Merge
+> **Working name:** Ours
 > **Core claim:** for multimodal retrieval, the transferable topological object is not an identity-agnostic persistence barcode, but the **correspondence-aware multiscale connectivity hierarchy of the query--candidate relation**.
 
 ## 1. Motivation
@@ -15,7 +15,7 @@ Existing distillation objectives transfer one of three weaker objects:
 
 A natural first attempt is to construct a weighted bipartite graph from cross-modal distances and match its teacher and student persistence diagrams. However, **diagram-level matching is insufficient for retrieval** because a persistence diagram discards the identities of the queries and candidates participating in each topological event.
 
-The proposed method therefore distills the complete identity-preserving $H_0$ connectivity evolution of the cross-modal relation. Here, identity means that teacher and student rows refer to the same query or candidate; it does **not** mean that CM-Merge consumes an additional class-label annotation. The method remains black-box and dimension-agnostic: only the final normalized teacher embeddings are required, and no teacher hidden states, attention maps, logits head, or learned teacher-to-student projector are used.
+The proposed method therefore distills the complete identity-preserving $H_0$ connectivity evolution of the cross-modal relation. Here, identity means that teacher and student rows refer to the same query or candidate; it does **not** mean that Ours consumes an additional class-label annotation. The method remains black-box and dimension-agnostic: only the final normalized teacher embeddings are required, and no teacher hidden states, attention maps, logits head, or learned teacher-to-student projector are used.
 
 ## 2. Why Identity-Agnostic Diagram Matching Is Not Enough
 
