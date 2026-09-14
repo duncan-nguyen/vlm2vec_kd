@@ -160,7 +160,9 @@ def build_train_dataloader(dataset, collator, training_args, sampler=None):
         the others hangs the all-reduce.
     """
     if sampler is None:
-        task_homogeneous = (
+        task_homogeneous = getattr(
+            training_args, "task_homogeneous_sampling", False
+        ) or (
             getattr(training_args, "kd_loss_type", None) == "ours"
             and getattr(training_args, "ours_task_homogeneous", True)
         )

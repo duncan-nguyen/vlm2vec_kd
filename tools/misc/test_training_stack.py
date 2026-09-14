@@ -560,6 +560,30 @@ def dataloader_checks():
         list(rank0) != rows0,
     )
 
+    TA.kd_loss_type = "span_propose_attn"
+    TA.task_homogeneous_sampling = True
+    loader = build_train_dataloader(MultiTaskDS(), lambda b: b, TA())
+    check(
+        "the generic flag enables homogeneous sampling for HieRD",
+        isinstance(loader.sampler, TaskHomogeneousSampler),
+    )
+
+    TA.task_homogeneous_sampling = False
+    TA.kd_loss_type = "ours"
+    TA.ours_task_homogeneous = True
+    loader = build_train_dataloader(MultiTaskDS(), lambda b: b, TA())
+    check(
+        "Ours keeps its homogeneous default",
+        isinstance(loader.sampler, TaskHomogeneousSampler),
+    )
+
+    TA.ours_task_homogeneous = False
+    loader = build_train_dataloader(MultiTaskDS(), lambda b: b, TA())
+    check(
+        "Ours can still explicitly select the ordinary sampler",
+        not isinstance(loader.sampler, TaskHomogeneousSampler),
+    )
+
 
 def span_common_checks():
     """The HieRD span helpers: what may be detached, and where the blocks sit.

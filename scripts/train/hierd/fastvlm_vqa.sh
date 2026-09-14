@@ -3,8 +3,23 @@
 # Paper: Table 1 (VQA block, student FastVLM-0.5B); config Tables 6/8/9.
 # Method = --kd_loss_type span_propose_attn
 
-# Số lượng GPU trên mỗi node (máy)
-NUM_GPUS_PER_NODE=1
+# Runtime overrides keep the paper defaults while allowing explicit DDP runs.
+NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-1}"
+PER_DEVICE_BATCH_SIZE="${PER_DEVICE_BATCH_SIZE:-16}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
+SEED="${SEED:-42}"
+OUTPUT_DIR="${OUTPUT_DIR:-training/hierd_fastvlm_vqa}"
+KD_WEIGHT="${KD_WEIGHT:-2.5}"
+W_CROSS_MODAL_LOSS="${W_CROSS_MODAL_LOSS:-2.5}"
+TASK_HOMOGENEOUS_SAMPLING="${TASK_HOMOGENEOUS_SAMPLING:-False}"
+
+GLOBAL_BATCH_SIZE=$((NUM_GPUS_PER_NODE * PER_DEVICE_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS))
+EXPECTED_GLOBAL_BATCH_SIZE="${EXPECTED_GLOBAL_BATCH_SIZE:-$GLOBAL_BATCH_SIZE}"
+if [[ "$GLOBAL_BATCH_SIZE" -ne "$EXPECTED_GLOBAL_BATCH_SIZE" ]]; then
+    echo "Refusing to launch: global batch is $GLOBAL_BATCH_SIZE, expected $EXPECTED_GLOBAL_BATCH_SIZE" >&2
+    exit 2
+fi
+echo "HieRD launch: world_size=$NUM_GPUS_PER_NODE per_device_batch=$PER_DEVICE_BATCH_SIZE grad_accum=$GRADIENT_ACCUMULATION_STEPS global_batch=$GLOBAL_BATCH_SIZE task_homogeneous=$TASK_HOMOGENEOUS_SAMPLING"
 
 # Đường dẫn tới file script training của bạn
 TRAIN_SCRIPT="tools/train_distill_ddp.py"
@@ -39,27 +54,29 @@ torchrun --standalone \
     --dataset_split "original" \
     --image_dir "$MMEB_TRAIN_DIR" \
     --percent_data 1.0 \
-    --output_dir "training/hierd_fastvlm_vqa" \
-    --per_device_train_batch_size 16 \
-    --gradient_accumulation_steps 1 \
+    --output_dir "$OUTPUT_DIR" \
+    --per_device_train_batch_size "$PER_DEVICE_BATCH_SIZE" \
+    --gradient_accumulation_steps "$GRADIENT_ACCUMULATION_STEPS" \
     --learning_rate 1e-4 \
     --num_train_epochs 1 \
     --bf16 \
     --save_total_limit 5 \
     --logging_steps 1 \
     --save_strategy "epoch" \
-    --seed 42 \
+    --seed "$SEED" \
     --weight_decay 0.01 \
     --normalize True \
     --teacher_normalize True \
     --lr_scheduler_type "cosine" \
     --warmup_ratio 0.03 \
-    --kd_weight 2.5 \
-    --w_cross_modal_loss 2.5 \
+    --kd_weight "$KD_WEIGHT" \
+    --w_cross_modal_loss "$W_CROSS_MODAL_LOSS" \
+    --task_homogeneous_sampling "$TASK_HOMOGENEOUS_SAMPLING" \
     --kd_loss_type "span_propose_attn" \
     --image_resolution "448" \
     --teacher_layer_mapping 0 22 25 28 \
     --student_layer_mapping 0 18 21 24 \
     --split_layer_mapping 0 1 4 4 4 \
     --min_samples_dbscan_teacher 8 \
-    --projector_lr 5e-4
+    --projector_lr 5e-4 \
+    "$@"

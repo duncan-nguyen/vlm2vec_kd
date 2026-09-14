@@ -12,6 +12,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-training/hierd_fastvlm_cls}"
 KD_WEIGHT="${KD_WEIGHT:-2.5}"
 W_CROSS_MODAL_LOSS="${W_CROSS_MODAL_LOSS:-2.5}"
 HIERD_CONTRASTIVE_ONLY="${HIERD_CONTRASTIVE_ONLY:-False}"
+TASK_HOMOGENEOUS_SAMPLING="${TASK_HOMOGENEOUS_SAMPLING:-False}"
 
 GLOBAL_BATCH_SIZE=$((NUM_GPUS_PER_NODE * PER_DEVICE_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS))
 EXPECTED_GLOBAL_BATCH_SIZE="${EXPECTED_GLOBAL_BATCH_SIZE:-$GLOBAL_BATCH_SIZE}"
@@ -19,7 +20,7 @@ if [[ "$GLOBAL_BATCH_SIZE" -ne "$EXPECTED_GLOBAL_BATCH_SIZE" ]]; then
     echo "Refusing to launch: global batch is $GLOBAL_BATCH_SIZE, expected $EXPECTED_GLOBAL_BATCH_SIZE" >&2
     exit 2
 fi
-echo "HieRD launch: world_size=$NUM_GPUS_PER_NODE per_device_batch=$PER_DEVICE_BATCH_SIZE grad_accum=$GRADIENT_ACCUMULATION_STEPS global_batch=$GLOBAL_BATCH_SIZE contrastive_only=$HIERD_CONTRASTIVE_ONLY"
+echo "HieRD launch: world_size=$NUM_GPUS_PER_NODE per_device_batch=$PER_DEVICE_BATCH_SIZE grad_accum=$GRADIENT_ACCUMULATION_STEPS global_batch=$GLOBAL_BATCH_SIZE contrastive_only=$HIERD_CONTRASTIVE_ONLY task_homogeneous=$TASK_HOMOGENEOUS_SAMPLING"
 
 # Đường dẫn tới file script training của bạn
 TRAIN_SCRIPT="tools/train_distill_ddp.py"
@@ -72,10 +73,12 @@ torchrun --standalone \
     --kd_weight "$KD_WEIGHT" \
     --w_cross_modal_loss "$W_CROSS_MODAL_LOSS" \
     --hierd_contrastive_only "$HIERD_CONTRASTIVE_ONLY" \
+    --task_homogeneous_sampling "$TASK_HOMOGENEOUS_SAMPLING" \
     --kd_loss_type "span_propose_attn" \
     --image_resolution "448" \
     --teacher_layer_mapping 0 22 25 28 \
     --student_layer_mapping 0 18 21 24 \
     --split_layer_mapping 0 1 4 4 4 \
     --min_samples_dbscan_teacher 8 \
-    --projector_lr 5e-4
+    --projector_lr 5e-4 \
+    "$@"

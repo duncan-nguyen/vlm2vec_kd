@@ -317,6 +317,12 @@ class TrainingArguments(TrainingArguments):
             "help": "HieRD ablation: optimize only the globally gathered in-batch contrastive loss and skip all teacher/span/RKD computation"
         },
     )
+    task_homogeneous_sampling: bool = field(
+        default=False,
+        metadata={
+            "help": "form every gathered global batch from one training subset, for methods such as HieRD that need task-homogeneous negatives"
+        },
+    )
     min_samples_dbscan_teacher: int = field(
         default=2,
         metadata={
