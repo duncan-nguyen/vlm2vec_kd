@@ -105,7 +105,7 @@ scripts/
   data/          download_mmeb.py, precompute_teacher_embeddings.sh + encoding
   train/         <method>/<student>_<task>.sh, the full method x student x task
                  matrix + README.md
-  eval/          cls.sh / vqa.sh / cls_ood.sh / vqa_ood.sh / all.sh (Table 1)
+  eval/          cls / vqa / ret / gd (+ _ood).sh, run_group.sh, all.sh
 tools/           python entrypoints
   train_distill_ddp.py         DDP trainer, no autocast (emkd/emo/hierd/pdtw/pproj)
   train_distill_no_deepspeed.py DDP trainer under bf16 autocast (ours/rkd/uld/talas)
@@ -183,7 +183,9 @@ scripts/train/                   README.md  the matrix + compatibility notes
 ```
 
 Each directory holds `fastvlm_cls.sh`, `fastvlm_vqa.sh`,
-`llava_onevision_cls.sh` and `llava_onevision_vqa.sh`.
+`llava_onevision_cls.sh` and `llava_onevision_vqa.sh`. `ours/` and `rkd/` also
+hold `<student>_ret.sh` and `<student>_grounding.sh`; subsets, splits and the
+shared protocol are in [docs/datasets.md](docs/datasets.md).
 
 ```bash
 bash scripts/train/hierd/fastvlm_cls.sh
@@ -317,15 +319,17 @@ It needs the MMEB-eval images (`python scripts/data/download_mmeb.py --eval`,
 because training finished and the checkpoint is saved -- `--eval_fail_hard True`
 for a sweep where a missing number is a failed run.
 
-On a multi-GPU run the subsets are sharded round-robin across the ranks, so the
-full 20-benchmark sweep costs roughly `20 / num_gpus` sequential evaluations.
+By default (`auto`) a run is evaluated on the IND and OOD groups of the task it
+trained on: 10 subsets for CLS or VQA, 12 for RET, 4 for grounding. On a
+multi-GPU run the subsets are sharded round-robin across the ranks, so a sweep
+of N subsets costs roughly `N / num_gpus` sequential evaluations.
 The per-subset scores and a `summary.json` land in `<checkpoint>/mmeb_eval`, and
 the grouped table is printed at the end of the training log.
 
 | flag | default | meaning |
 | --- | --- | --- |
 | `--eval_after_train` | `True` | run the evaluation when training finishes |
-| `--eval_benchmarks` | `all` | `cls_ind` `vqa_ind` `cls_ood` `vqa_ood`, the aliases `all` / `ind` / `ood` / `cls` / `vqa`, or bare MMEB subset names |
+| `--eval_benchmarks` | `auto` | `auto` (the trained task's groups), `cls_ind` `vqa_ind` `cls_ood` `vqa_ood` `ret_ind` `ret_ood` `gd_ind` `gd_ood`, the aliases `all` / `ind` / `ood` / `cls` / `vqa` / `ret` / `gd`, or bare MMEB subset names |
 | `--eval_image_dir` | `$MMEB_EVAL_DIR` or `./eval_images` | MMEB-eval images |
 | `--eval_checkpoint` | `<output_dir>/checkpoint-final` | what to evaluate |
 | `--eval_output_dir` | `<checkpoint>/mmeb_eval` | where scores and `summary.json` go |

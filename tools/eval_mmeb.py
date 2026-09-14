@@ -29,7 +29,7 @@ from src.arguments import DataArguments, ModelArguments, TrainingArguments
 from src.data.collator.eval_collator import EvalCollator
 from src.data.dataset.mmeb_dataset import EvalDataset
 from src.evaluation.dataloader import build_eval_dataloader
-from src.evaluation.eval_utils import batched_predict
+from src.evaluation.eval_utils import batched_predict, strip_orphan_image_token
 from src.model.model import MMEBModel
 from src.model.processor import COLPALI, get_backbone_name, load_processor
 from src.utils import print_rank
@@ -256,14 +256,10 @@ def main():
             subset,
             split=data_args.dataset_split,
         )
-        if (
-            (subset == "WebQA" or subset == "EDIS")
-            and "qry_text" in eval_data.column_names
-            and model_args.model_backbone == "llava_qwen2"
-        ):
-            eval_data = eval_data.map(
-                lambda x: {"qry_text": x["qry_text"].replace("<|image_1|>", "").strip()}
-            )
+        # The same rewrite EvalDataset applied before encoding, so the scoring
+        # keys match the keys the query embeddings were stored under.
+        if {"qry_text", "qry_img_path"} <= set(eval_data.column_names):
+            eval_data = eval_data.map(strip_orphan_image_token)
 
         # for ColPali, pad only once for candidates
         if model_args.model_backbone == COLPALI:

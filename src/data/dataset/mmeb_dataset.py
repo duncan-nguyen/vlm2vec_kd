@@ -15,6 +15,7 @@ from src.data.dataset.base_pair_dataset import (
     AutoPairDataset,
     add_metainfo_hook,
 )
+from src.evaluation.eval_utils import strip_orphan_image_token
 from src.model.processor import PHI3V, VLM_IMAGE_TOKENS
 from src.utils import print_master, print_rank
 
@@ -419,14 +420,11 @@ class EvalDataset(Dataset):
                 split=self.data_args.dataset_split,
             )
         )
-        if (
-            (subset == "WebQA" or subset == "EDIS")
-            and "qry_text" in self.eval_data.column_names
-            and model_args.model_backbone == "llava_qwen2"
-        ):
-            self.eval_data = self.eval_data.map(
-                lambda x: {"qry_text": x["qry_text"].replace("<|image_1|>", "").strip()}
-            )
+        # Text-only queries that still carry an image placeholder (WebQA, EDIS).
+        # tools/eval_mmeb.py applies the same rewrite before scoring, so the
+        # (text, image) keys the embeddings are stored under still match.
+        if {"qry_text", "qry_img_path"} <= set(self.eval_data.column_names):
+            self.eval_data = self.eval_data.map(strip_orphan_image_token)
         self.paired_data = self.get_paired_data(text_field, img_path_field)
 
         use_mod = (

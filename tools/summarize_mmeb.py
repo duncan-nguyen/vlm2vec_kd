@@ -3,13 +3,15 @@
 
     python tools/summarize_mmeb.py <score-dir> [<score-dir> ...]
 
-Each directory is a `--encode_output_path` of `tools/eval_mmeb.py`; the CLS and
-VQA scripts write to two different ones, so pass both to get the whole table:
+Each directory is a `--encode_output_path` of `tools/eval_mmeb.py`; the per-group
+scripts write to different ones, so pass all of them to get the whole table:
 
-    python tools/summarize_mmeb.py CKPT/mmeb_cls CKPT/mmeb_vqa
+    python tools/summarize_mmeb.py CKPT/mmeb_cls CKPT/mmeb_cls_ood
 
-Subsets with no score file print as `--`, so a partial sweep is readable while
-the rest is still running.
+Without `--benchmarks`, every group that has at least one score is reported, so
+a retrieval checkpoint does not print empty CLS/VQA blocks. Inside a reported
+group, subsets with no score file print as `--`, so a partial sweep is readable
+while the rest is still running.
 """
 
 # Run directly from the repo root: put the repo root on sys.path so `import src.…`
@@ -31,18 +33,23 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("score_dirs", nargs="+",
                     help="one or more --encode_output_path directories")
-    ap.add_argument("--benchmarks", nargs="+", default=["all"],
-                    help="groups to report (default: all); see src/evaluation/benchmarks.py")
+    ap.add_argument("--benchmarks", nargs="+", default=None,
+                    help="groups to report (default: every group with a score); "
+                         "see src/evaluation/benchmarks.py")
     ap.add_argument("--json", metavar="PATH",
                     help="also write the summary as JSON to PATH")
     args = ap.parse_args()
 
-    subsets = resolve_groups(args.benchmarks)
     # Later directories win, so re-running one group into a fresh directory
     # overrides the stale copy of it.
     scores = {}
     for score_dir in args.score_dirs:
         scores.update(read_scores(score_dir, ALL_SUBSETS))
+
+    if args.benchmarks:
+        subsets = resolve_groups(args.benchmarks)
+    else:
+        subsets = [subset for subset in ALL_SUBSETS if subset in scores]
 
     summary = build_summary(scores, subsets)
     print(format_table(summary, title=" + ".join(args.score_dirs)))

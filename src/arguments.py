@@ -392,9 +392,9 @@ class TrainingArguments(TrainingArguments):
         },
     )
     talas_lasd_detach_guide: bool = field(
-        default=True,
+        default=False,
         metadata={
-            "help": "treat the upper layer's relation matrix as a constant guide, so L_LASD propagates top-down as section 3.2 describes. False makes it a symmetric smoothness penalty, which is eq. 5 read literally"
+            "help": "stop the gradient into the upper layer's relation matrix in L_LASD. Off by default: eq. 5 of the paper has no stop-gradient, and TALAS is run as a baseline at its reported settings. True is an ablation, not the paper's method"
         },
     )
     talas_lasd_reduction: str = field(
@@ -436,9 +436,9 @@ class TrainingArguments(TrainingArguments):
         },
     )
     eval_benchmarks: list[str] = field(
-        default_factory=lambda: ["all"],
+        default_factory=lambda: ["auto"],
         metadata={
-            "help": "which benchmark groups --eval_after_train runs: cls_ind, vqa_ind, cls_ood, vqa_ood, the aliases all/ind/ood/cls/vqa, or bare MMEB-eval subset names. See src/evaluation/benchmarks.py"
+            "help": "which benchmark groups --eval_after_train runs: auto (the IND and OOD groups of the task the run trained on; the default), the groups cls_ind, vqa_ind, cls_ood, vqa_ood, ret_ind, ret_ood, gd_ind, gd_ood, the aliases all/ind/ood/cls/vqa/ret/gd, or bare MMEB-eval subset names. See src/evaluation/benchmarks.py"
         },
     )
     eval_dataset_split: str = field(

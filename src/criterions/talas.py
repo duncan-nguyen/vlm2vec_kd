@@ -13,7 +13,7 @@ final embedding through one learnable projection per layer::
 
 `L_LASD` (eq. 5) is the student's own top-down self-distillation: the batch
 relation matrix R_l = norm(E_l) norm(E_l)^T of layer `l` is pulled towards that
-of the layer above it, which acts as a (detached) guide::
+of the layer above it. As in eq. 5, gradient flows into both layers of a pair::
 
     L_LASD = 1/(L-1) * sum_l || R_{l+1} - R_l ||_F^2
 
@@ -208,11 +208,8 @@ class TALASLoss(DistillCriterion):
         for i in range(num_pairs):
             lower, upper = relations[i], relations[i + 1]
             if self.detach_guide:
-                # "we utilize the student's own upper layer (l+1) as a dynamic
-                # guide for the immediate lower layer (l)" (sec. 3.2). Without
-                # the detach the term is a symmetric smoothness penalty and the
-                # teacher-anchored top gets dragged down towards the untrained
-                # bottom, which is the opposite of what the section describes.
+                # Ablation only. Eq. 5 has no stop-gradient, so the paper's
+                # method (the default) lets both layers of the pair move.
                 upper = upper.detach()
             diff = (upper - lower).pow(2)
             total = total + (diff.mean() if self.reduction == "mean" else diff.sum())

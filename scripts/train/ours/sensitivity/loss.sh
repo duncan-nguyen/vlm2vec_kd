@@ -41,7 +41,7 @@
 set -euo pipefail
 
 CELLS="${CELLS:-fastvlm_cls}"
-SEEDS="${SEEDS:-42 43 44}"
+SEEDS="${SEEDS:-42}"
 VARIANTS="${VARIANTS:-student_only topo_only ours}"
 OURS_WEIGHT="${OURS_WEIGHT:-1.0}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-training/ours}"
